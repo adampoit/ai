@@ -6,5 +6,9 @@
       opencode = import ./nix/opencode.nix;
       default = self.homeManagerModules.opencode;
     };
+
+    files = {
+      globalInstructions = builtins.readFile ./global-instructions.md;
+    };
   };
 }
