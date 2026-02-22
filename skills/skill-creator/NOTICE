@@ -1,0 +1,18 @@
+skill-creator
+Copyright 2025 Anthropic, PBC
+
+This product includes software developed by Anthropic, PBC
+(https://www.anthropic.com/).
+
+This skill is a derivative work based on the "skill-creator" skill from the
+Anthropic Skills repository (https://github.com/anthropics/skills), originally
+released under the Apache License, Version 2.0.
+
+Modifications from the original work include:
+- Replaced Python scripts with .NET 10 file-based C# apps
+- Made language agent-agnostic (replaced Claude-specific references with generic agent terminology)
+- Updated code examples to use C#/.NET instead of Python
+- Added documentation for .NET 10's #:package directive for NuGet dependencies
+- Updated skill structure references to reflect .cs file extensions
+
+Original work: https://github.com/anthropics/skills/tree/main/skills/skill-creator
