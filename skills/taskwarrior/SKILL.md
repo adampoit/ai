@@ -25,6 +25,14 @@ With custom filters:
 task project:work due:today +PENDING export
 ```
 
+For tasks that fall between two dates (entry, completion, due, or modified time), use Bash variables:
+
+```bash
+start_date="<start-date>"
+end_date="<end-date>"
+task "((entry.after:${start_date} and entry.before:${end_date}) or (end.after:${start_date} and end.before:${end_date}) or (due.after:${start_date} and due.before:${end_date}) or (modified.after:${start_date} and modified.before:${end_date}))" export
+```
+
 Use `task rc.verbose=nothing ...` for concise text output when not using `export`.
 
 ## Task Summary
