@@ -1,36 +1,51 @@
-# AI Skills and Prompts
+# AI Agent Assets
 
-This repository contains reusable agent assets:
+Reusable assets for AI agents: shared instructions, agent profiles, prompts, and tool-integrated skills.
+This repo also ships an OpenCode Home Manager module for Nix-based setups.
 
-- `agents/` - agent profiles and behavior instructions
-- `prompts/` - task-specific prompt templates
-- `skills/` - tool-integrated skills with usage docs and scripts
+## What's Included
 
-## Requirements
+- `global-instructions.md`: shared cross-agent rules and guidance
+- `agents/`: agent profiles and behavior guidance
+- `prompts/`: reusable command prompt templates
+- `skills/`: local skills with docs and helper scripts
+- `nix/opencode.nix`: Home Manager module export
 
-- `opencode` CLI available on `PATH`
-- .NET SDK (for C# script skills)
+## OpenCode Home Manager Module
 
-Some skills integrate with third-party tools or APIs and may require local credentials (for example, `SLACK_API_TOKEN` for Slack queries).
+If you use OpenCode with Home Manager, this repository exports `homeManagerModules.opencode`.
 
-## Home Manager Module
+### Quick Start (Nix Flakes)
 
-This repository exports a Home Manager module at `homeManagerModules.opencode`.
-
-Example flake input:
+Add this repo as a flake input:
 
 ```nix
 inputs.ai.url = "github:adampoit/ai";
 ```
 
-Example usage:
+Enable the module in Home Manager:
 
 ```nix
 home-manager.sharedModules = [
-	inputs.ai.homeManagerModules.opencode
+  inputs.ai.homeManagerModules.opencode
 ];
+```
+
+## Requirements
+
+- `opencode` on `PATH` (only needed when using the OpenCode module/CLI)
+- .NET SDK (required by C#-based skills)
+- Any tool-specific credentials needed by individual skills (for example, `SLACK_API_TOKEN` for Slack)
+
+## Validation
+
+For module-related edits, validate syntax with:
+
+```bash
+nix flake show --no-write-lock-file
+nix-instantiate --parse ./nix/opencode.nix
 ```
 
 ## License
 
-MIT.
+MIT
