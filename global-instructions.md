@@ -59,3 +59,7 @@
   - **dotnet**: `dotnet package search <query>`.
   - **Other ecosystems**: use `pip index versions <package>`, `cargo search <query>`, etc., or check official registry websites.
 - **Prefer official sources**: When in doubt, reference the official package registry page rather than third-party mirrors or memory.
+
+### Version Control
+
+- **Prefer `jj` over `git`**: If `jj` (Jujutsu) is initialized in a repository, use it instead of `git` for all version control operations.
