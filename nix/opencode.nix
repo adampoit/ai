@@ -27,6 +27,7 @@
       permission = let
         bashPermissionFiles = [
           ./permissions/bash/core.nix
+          ./permissions/bash/git.nix
           ./permissions/bash/jira.nix
           ./permissions/bash/gh.nix
           ./permissions/bash/notmuch.nix
