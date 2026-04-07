@@ -42,13 +42,6 @@
           bashPermissionFiles;
       };
 
-      keybinds = {
-        messages_half_page_up = "ctrl+u";
-        messages_half_page_down = "ctrl+d";
-      };
-
-      theme = "gruvbox";
-
       formatter = {
         alejandra = {
           command = ["alejandra" "$FILE"];
@@ -72,6 +65,15 @@
       };
 
       plugin = ["@slkiser/opencode-quota"];
+    };
+
+    tui = {
+      keybinds = {
+        messages_half_page_up = "ctrl+u";
+        messages_half_page_down = "ctrl+d";
+      };
+
+      theme = "gruvbox";
     };
   };
 }
