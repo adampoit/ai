@@ -2,7 +2,7 @@
   programs.opencode = {
     enable = true;
 
-    rules = builtins.readFile ../global-instructions.md;
+    context = builtins.readFile ../global-instructions.md;
 
     agents = ../agents;
     commands = ../prompts;
