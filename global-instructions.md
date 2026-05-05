@@ -63,3 +63,7 @@
 ### Version Control
 
 - **Prefer `jj` over `git`**: If `jj` (Jujutsu) is initialized in a repository, use it instead of `git` for all version control operations.
+
+### Interactive Processes
+
+- **Use tmux for long-running or interactive terminal processes**: Do not use background bash for development servers, watch commands, REPLs, debuggers, log tails, or commands that need later inspection/input. Use the `tmux-interactive-processes` skill.
