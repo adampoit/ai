@@ -4,6 +4,7 @@
   outputs = {self, ...}: {
     homeManagerModules = {
       opencode = import ./nix/opencode.nix;
+      pi = import ./nix/pi.nix;
       default = self.homeManagerModules.opencode;
     };
 
