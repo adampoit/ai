@@ -224,20 +224,37 @@ function paceColor(pace: number | undefined): string {
 	return gruvbox.green;
 }
 
-function limitingWindow(provider: string, windows: UsageWindow[]): UsageWindow {
-	return windows.reduce((worst, window) => {
-		const worstPace = quotaPace(provider, worst) ?? -1;
-		const pace = quotaPace(provider, window) ?? -1;
-		return pace > worstPace ? window : worst;
-	}, windows[0]);
+function burnRateWindows(windows: UsageWindow[]): UsageWindow[] {
+	return windows.filter((window) => quotaLabel(window.label) !== "5h");
 }
 
-function quotaCompact(window: UsageWindow, limiting: UsageWindow): string {
+function limitingWindow(
+	provider: string,
+	windows: UsageWindow[],
+): UsageWindow | undefined {
+	return burnRateWindows(windows).reduce<UsageWindow | undefined>(
+		(worst, window) => {
+			if (!worst) return window;
+			const worstPace = quotaPace(provider, worst) ?? -1;
+			const pace = quotaPace(provider, window) ?? -1;
+			return pace > worstPace ? window : worst;
+		},
+		undefined,
+	);
+}
+
+function quotaCompact(
+	window: UsageWindow,
+	limiting: UsageWindow | undefined,
+): string {
 	const eta = window === limiting ? resetEta(window) : undefined;
 	return `${quotaLabel(window.label)} ${quotaPercent(window)}${eta ? ` ↻ ${eta}` : ""}`;
 }
 
-function quotaVisual(window: UsageWindow, limiting: UsageWindow): string {
+function quotaVisual(
+	window: UsageWindow,
+	limiting: UsageWindow | undefined,
+): string {
 	if (window !== limiting) return quotaCompact(window, limiting);
 	const eta = resetEta(window);
 	return `${quotaLabel(window.label)} ${quotaBar(window.percentRemaining, 6)} ${quotaPercent(window)}${eta ? ` ↻ ${eta}` : ""}`;
@@ -269,7 +286,7 @@ function quotaVariants(
 		return [{ text: "quota ?", fg: gruvbox.gray, bg: gruvbox.bg }];
 
 	const limiting = limitingWindow(result.provider, windows);
-	const pace = quotaPace(result.provider, limiting);
+	const pace = limiting ? quotaPace(result.provider, limiting) : undefined;
 	const color = paceColor(pace);
 	const compact = windows.map((window) => quotaCompact(window, limiting));
 	return [
@@ -285,7 +302,11 @@ function quotaVariants(
 			fg: color,
 			bg: gruvbox.bg,
 		},
-		{ text: quotaCompact(limiting, limiting), fg: color, bg: gruvbox.bg },
+		{
+			text: quotaCompact(limiting ?? windows[0], limiting),
+			fg: color,
+			bg: gruvbox.bg,
+		},
 	];
 }
 
