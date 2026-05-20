@@ -2,11 +2,23 @@ import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
 } from "@mariozechner/pi-coding-agent";
-import { DynamicBorder, keyHint } from "@mariozechner/pi-coding-agent";
 import { StringEnum } from "@mariozechner/pi-ai";
-import { Text, truncateToWidth } from "@mariozechner/pi-tui";
+import { truncateToWidth } from "@mariozechner/pi-tui";
+import {
+	BlockFrame,
+	CachedComponent,
+	expandTabs,
+	gruvbox,
+	KeyHintLine,
+	StaticLines,
+	ToolShell,
+	type BadgeSpec,
+	type ExpansionAwareComponent,
+	type InvocationLineOptions,
+	type ToolShellOptions,
+} from "../components/index.ts";
 import { Type } from "typebox";
-import { readFile } from "node:fs/promises";
+import { readFile, access } from "node:fs/promises";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -42,6 +54,8 @@ const symbolPositionSchema = Type.Object({
 const searchSchema = Type.Object({
 	query: Type.String({ description: "Workspace symbol search query." }),
 });
+
+const emptySchema = Type.Object({});
 
 type DiagnosticParams = {
 	files?: string[];
@@ -118,6 +132,55 @@ export default function (pi: ExtensionAPI) {
 	let lastInjectedSignature = "";
 	let manager: LspManager | undefined;
 
+	pi.registerMessageRenderer(
+		"lsp-diagnostics",
+		(message, { expanded }, theme) => {
+			const content =
+				typeof message.content === "string"
+					? message.content
+					: String(message.content ?? "");
+			const diagnostics = diagnosticsFromDetails(message.details);
+			const counts = severityCounts(diagnostics);
+			const hasErrors = counts.error > 0;
+			const hasWarnings = counts.warning > 0;
+			const lines = splitTextLines(content);
+			const maxLines = expanded
+				? expandedDiagnosticMessageLines
+				: collapsedDiagnosticMessageLines;
+			const hidden = Math.max(0, lines.length - maxLines);
+			const telemetry = [...severityBadges(counts)];
+			if (hidden > 0) {
+				telemetry.push({ text: `${hidden} hidden`, bg: gruvbox.bg1 });
+			}
+			return new ToolShell({
+				title: "LSP Diagnostics",
+				icon: "󰒡",
+				accent: hasErrors
+					? gruvbox.red
+					: hasWarnings
+						? gruvbox.yellow
+						: gruvbox.green,
+				state: hasErrors
+					? "error"
+					: hasWarnings
+						? "neutral"
+						: "success",
+				status: hasErrors
+					? "errors"
+					: hasWarnings
+						? "warnings"
+						: "clean",
+				telemetry,
+				expansion: { expanded },
+				theme,
+				children: new LspResultPane(content, theme, {
+					maxLines,
+					expansionLimit: collapsedDiagnosticMessageLines,
+				}),
+			});
+		},
+	);
+
 	pi.on("session_start", async (_event, ctx) => {
 		const renderStatus = (status: string) =>
 			ctx.ui.setStatus("lsp", ctx.ui.theme.fg("dim", status));
@@ -145,10 +208,12 @@ export default function (pi: ExtensionAPI) {
 	pi.on("agent_end", async (_event, ctx) => {
 		if (injectedForTurn) return;
 
-		const diagnostics = await getManager(
-			ctx.cwd,
-			manager,
-		).collectDiagnostics({ scope: "changed" }, ctx.signal);
+		const diagnostics = (
+			await getManager(ctx.cwd, manager).collectDiagnostics(
+				{ scope: "changed" },
+				ctx.signal,
+			)
+		).filter((d) => d.severity === "error" || d.severity === "warning");
 		if (diagnostics.length === 0) return;
 
 		const signature = JSON.stringify(diagnostics);
@@ -181,7 +246,8 @@ export default function (pi: ExtensionAPI) {
 			"Use lsp_diagnostics after editing code or configuration files to catch language-server errors and warnings before reporting completion.",
 		],
 		parameters: diagnosticSchema,
-		renderResult: renderTextToolResult,
+		renderShell: "self",
+		...lspToolRenderer("LSP Diagnostics", "󰒡", gruvbox.yellow),
 		async execute(
 			_toolCallId,
 			params: DiagnosticParams,
@@ -222,7 +288,8 @@ export default function (pi: ExtensionAPI) {
 			"Use lsp_inspect when you need to understand a symbol's type, docs, definition, or role before modifying code that uses it.",
 		],
 		parameters: symbolPositionSchema,
-		renderResult: renderTextToolResult,
+		renderShell: "self",
+		...lspToolRenderer("LSP Inspect", "󰈙", gruvbox.blue),
 		async execute(
 			_toolCallId,
 			params: SymbolPositionParams,
@@ -273,7 +340,8 @@ export default function (pi: ExtensionAPI) {
 			"Use lsp_usages before renaming, deleting, changing signatures, or changing exported/public symbols.",
 		],
 		parameters: symbolPositionSchema,
-		renderResult: renderTextToolResult,
+		renderShell: "self",
+		...lspToolRenderer("LSP Usages", "󰈇", gruvbox.purple),
 		async execute(
 			_toolCallId,
 			params: SymbolPositionParams,
@@ -313,7 +381,8 @@ export default function (pi: ExtensionAPI) {
 			"Use lsp_search when you know a symbol or concept name but not the file where it is defined.",
 		],
 		parameters: searchSchema,
-		renderResult: renderTextToolResult,
+		renderShell: "self",
+		...lspToolRenderer("LSP Search", "", gruvbox.aqua),
 		async execute(
 			_toolCallId,
 			params: { query: string },
@@ -329,6 +398,32 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
+	pi.registerTool({
+		name: "lsp_refresh",
+		label: "LSP Refresh",
+		description:
+			"Restart language servers and clear cached diagnostics/documents after LSP configuration changes.",
+		promptSnippet:
+			"Restart language servers when project LSP settings change",
+		promptGuidelines: [
+			"Use lsp_refresh after editing language-server configuration files (for example .luarc.json) before re-running diagnostics.",
+		],
+		parameters: emptySchema,
+		renderShell: "self",
+		...lspToolRenderer("LSP Refresh", "󰑓", gruvbox.orange),
+		async execute(_toolCallId, _params, signal, onUpdate, ctx) {
+			onUpdate?.({
+				content: [{ type: "text", text: "Refreshing LSP servers..." }],
+				details: {},
+			});
+			await getManager(ctx.cwd, manager).refresh(signal);
+			return {
+				content: [{ type: "text", text: "LSP servers refreshed." }],
+				details: { refreshed: true },
+			};
+		},
+	});
+
 	pi.registerCommand("lsp-diagnostics", {
 		description: "Show LSP diagnostics for changed files",
 		handler: async (_args, ctx) => {
@@ -340,6 +435,14 @@ export default function (pi: ExtensionAPI) {
 				formatDiagnostics(diagnostics, "LSP diagnostics"),
 				diagnostics.length ? "warning" : "info",
 			);
+		},
+	});
+
+	pi.registerCommand("lsp-refresh", {
+		description: "Restart language servers and clear cached diagnostics",
+		handler: async (_args, ctx) => {
+			await getManager(ctx.cwd, manager).refresh(ctx.signal);
+			ctx.ui.notify("LSP servers refreshed.", "info");
 		},
 	});
 
@@ -441,24 +544,63 @@ async function showToggleView(
 	await ctx.ui.custom<void>(
 		(tui, theme, kb, done) => {
 			let showAll = false;
-			const border = new DynamicBorder((text) =>
-				theme.fg("border", text),
-			);
 			return {
 				render(width: number) {
-					const lines = [
-						theme.fg(
-							"dim",
-							`t: ${showAll ? "show on only" : "show all configured"} • esc: close`,
-						),
-						"",
-						...formatOnOffSections(title, entries, showAll).split(
-							"\n",
-						),
-						"",
-						border.render(width)[0] ?? "",
-					];
-					return lines.map((line) => truncateToWidth(line, width));
+					const running = entries.filter((entry) => entry.on).length;
+					const stopped = entries.length - running;
+					return new BlockFrame(
+						{
+							invalidate() {},
+							render(contentWidth: number) {
+								const help = new KeyHintLine(
+									[
+										{
+											key: "t",
+											label: showAll
+												? "show running only"
+												: "show all configured",
+										},
+										{ key: "esc", label: "close" },
+									],
+									{ theme, accent: gruvbox.blue },
+								).render(contentWidth);
+								return [
+									...help,
+									"",
+									...formatOnOffSections(
+										title,
+										entries,
+										showAll,
+									).split("\n"),
+								].map((line) =>
+									truncateToWidth(line, contentWidth),
+								);
+							},
+						},
+						{
+							title: {
+								title,
+								icon: "",
+								accent: gruvbox.blue,
+								badges: [
+									{
+										text: `${running} running`,
+										bg: gruvbox.bg2,
+									},
+									{
+										text: `${stopped} stopped`,
+										bg: gruvbox.bg2,
+									},
+								],
+								theme,
+							},
+							borderColor: gruvbox.blue,
+							background: gruvbox.bg1,
+							theme,
+							paddingX: 1,
+							paddingY: 1,
+						},
+					).render(width);
 				},
 				invalidate() {},
 				handleInput(data: string) {
@@ -516,7 +658,16 @@ class LspManager {
 			[...this.clients.values()].map((client) => client.stop()),
 		);
 		this.clients.clear();
+		this.diagnostics.clear();
+		this.openedDocuments.clear();
 		this.setStatus("");
+	}
+
+	async refresh(signal?: AbortSignal) {
+		this.setStatus("lsp: refreshing");
+		await this.stop();
+		this.prewarmed = false;
+		await this.prewarm(signal);
 	}
 
 	async collectDiagnostics(params: DiagnosticParams, signal?: AbortSignal) {
@@ -530,14 +681,25 @@ class LspManager {
 						params.scope ?? "changed",
 						signal,
 					);
-			const files = requestedFiles.filter((file) =>
+			const candidateFiles = requestedFiles.filter((file) =>
 				languageByExtension.has(path.extname(file)),
 			);
-			if (files.length === 0) return [];
+			if (candidateFiles.length === 0) return [];
 
-			for (const file of files) {
+			for (const file of candidateFiles) {
 				this.diagnostics.delete(path.normalize(file));
 			}
+			const files = (
+				await Promise.all(
+					candidateFiles.map(async (file) =>
+						(await fileExists(path.resolve(this.cwd, file)))
+							? file
+							: undefined,
+					),
+				)
+			).filter((file): file is string => Boolean(file));
+			if (files.length === 0) return [];
+
 			await Promise.all(
 				files.map(async (file) => {
 					await this.openDocument(file, signal);
@@ -826,40 +988,342 @@ function jsonToolResult(
 	};
 }
 
+const collapsedDiagnosticMessageLines = 16;
+const expandedDiagnosticMessageLines = 120;
 const collapsedResultLines = 12;
 
-function renderTextToolResult(
-	result: { content?: Array<{ type: string; text?: string }> },
-	{ expanded, isPartial }: { expanded?: boolean; isPartial?: boolean },
+type LspToolResult = {
+	content?: Array<{ type: string; text?: string }>;
+	details?: unknown;
+};
+
+type LspToolInfo = {
+	result: LspToolResult;
+	options: { expanded?: boolean; isPartial?: boolean };
+	isError: boolean;
+};
+
+type LspToolRenderContext = {
+	args: unknown;
+	state: unknown;
+	executionStarted: boolean;
+	expanded: boolean;
+	isError: boolean;
+};
+
+type LspToolState = {
+	shell?: ToolShell;
+	info?: LspToolInfo;
+};
+
+function lspToolRenderer(label: string, icon: string, accent: string) {
+	return {
+		renderCall(args: unknown, theme: any, context: LspToolRenderContext) {
+			const state = context.state as LspToolState;
+			const shell = state.shell ?? new ToolShell({ title: label });
+			state.shell = shell;
+			shell.setOptions(
+				buildLspShell(
+					label,
+					icon,
+					accent,
+					args,
+					state.info,
+					theme,
+					context,
+				),
+			);
+			return shell;
+		},
+		renderResult(
+			result: LspToolResult,
+			options: { expanded?: boolean; isPartial?: boolean },
+			theme: any,
+			context: LspToolRenderContext,
+		) {
+			const state = context.state as LspToolState;
+			state.info = { result, options, isError: context.isError };
+			state.shell?.setOptions(
+				buildLspShell(
+					label,
+					icon,
+					accent,
+					context.args,
+					state.info,
+					theme,
+					context,
+				),
+			);
+			return new StaticLines([]);
+		},
+	};
+}
+
+function buildLspShell(
+	label: string,
+	icon: string,
+	accent: string,
+	args: unknown,
+	info: LspToolInfo | undefined,
 	theme: any,
-) {
-	const textContent = result.content?.find(
-		(content) =>
-			content.type === "text" && typeof content.text === "string",
-	)?.text;
-	if (!textContent) {
-		return new Text(
-			theme.fg("dim", isPartial ? "Working..." : "No output"),
-			0,
-			0,
+	context: Pick<LspToolRenderContext, "executionStarted" | "expanded">,
+): ToolShellOptions {
+	const diagnostics = diagnosticsFromDetails(info?.result.details);
+	const counts = severityCounts(diagnostics);
+	const hasErrors =
+		counts.error > 0 ||
+		info?.isError ||
+		isFailedLspDetails(info?.result.details);
+	const hasWarnings = counts.warning > 0;
+	const isPending = !info || info.options.isPartial;
+	const expanded = info?.options.expanded ?? context.expanded;
+	const text =
+		lspTextOutput(info?.result) ||
+		(isPending
+			? context.executionStarted
+				? "Working..."
+				: "Queued..."
+			: "No output");
+	const textLines = splitTextLines(text);
+	const hidden = expanded
+		? 0
+		: Math.max(0, textLines.length - collapsedResultLines);
+
+	const invocation = summarizeLspInvocation(label, icon, args);
+	const telemetry = [...severityBadges(counts)];
+	if (hidden > 0) {
+		telemetry.push({
+			text: `${hidden} hidden`,
+			bg: gruvbox.bg1,
+		});
+	}
+
+	return {
+		title: label,
+		icon,
+		accent: hasErrors ? gruvbox.red : hasWarnings ? gruvbox.yellow : accent,
+		state: hasErrors
+			? "error"
+			: isPending
+				? "pending"
+				: hasWarnings
+					? "neutral"
+					: "success",
+		status: hasErrors
+			? "errors"
+			: isPending
+				? context.executionStarted
+					? "running"
+					: "queued"
+				: hasWarnings
+					? "warnings"
+					: diagnostics.length > 0
+						? "clean"
+						: "ok",
+		invocation,
+		telemetry,
+		expansion: { expanded },
+		theme,
+		children: new LspResultPane(text, theme, {
+			maxLines: expanded ? 200 : collapsedResultLines,
+			expansionLimit: collapsedResultLines,
+		}),
+	};
+}
+
+class LspResultPane extends CachedComponent implements ExpansionAwareComponent {
+	private readonly lines: string[];
+
+	constructor(
+		text: string,
+		private readonly theme: any,
+		private readonly options: { maxLines: number; expansionLimit: number },
+	) {
+		super();
+		this.lines = splitTextLines(text);
+	}
+
+	hasExpandableContent(): boolean {
+		return this.lines.length > this.options.expansionLimit;
+	}
+
+	protected doRender(width: number): string[] {
+		const visible = this.lines.slice(0, this.options.maxLines);
+		return visible.map((line) =>
+			truncateToWidth(
+				colorizeLspLine(expandTabs(line), this.theme),
+				width,
+				"",
+			),
 		);
 	}
+}
 
-	const lines = textContent.split("\n");
-	if (expanded || lines.length <= collapsedResultLines) {
-		return new Text(textContent, 0, 0);
+function summarizeLspInvocation(
+	label: string,
+	icon: string,
+	args: unknown,
+): InvocationLineOptions | undefined {
+	if (!args || typeof args !== "object") return undefined;
+	const value = args as Record<string, unknown>;
+	const invocationArgs: NonNullable<InvocationLineOptions["args"]> = [];
+
+	if (typeof value.symbol === "string") {
+		invocationArgs.push({
+			label: "symbol",
+			value: `"${formatArgValue(value.symbol)}"`,
+		});
+	}
+	if (Array.isArray(value.files) && value.files.length > 0) {
+		invocationArgs.push(
+			value.files.length === 1
+				? { label: "file", value: formatArgValue(value.files[0]) }
+				: { label: "files", value: `${value.files.length} files` },
+		);
+	} else if (typeof value.file === "string") {
+		invocationArgs.push({
+			label: "file",
+			value: formatArgValue(value.file),
+		});
+	} else if (typeof value.scope === "string") {
+		invocationArgs.push({ label: "scope", value: value.scope });
 	}
 
-	const hidden = lines.length - collapsedResultLines;
-	const preview = lines.slice(0, collapsedResultLines).join("\n");
-	return new Text(
-		`${preview}\n${theme.fg(
-			"muted",
-			`... ${hidden} more line${hidden === 1 ? "" : "s"} hidden (${keyHint("app.tools.expand", "to expand")})`,
-		)}`,
-		0,
-		0,
+	if (typeof value.query === "string") {
+		invocationArgs.push({
+			label: "query",
+			value: `"${formatArgValue(value.query)}"`,
+		});
+	}
+	if (typeof value.line === "number" || typeof value.character === "number") {
+		invocationArgs.push({
+			label: "position",
+			value: `${value.line ?? "?"}:${value.character ?? "?"}`,
+		});
+	}
+
+	if (invocationArgs.length === 0) return undefined;
+	return { command: label, icon, args: invocationArgs };
+}
+
+function severityBadges(
+	counts: Record<DiagnosticSeverity, number>,
+): BadgeSpec[] {
+	return (["error", "warning", "info", "hint", "unknown"] as const)
+		.filter((severity) => counts[severity] > 0)
+		.map((severity) => ({
+			text: `${counts[severity]} ${severity}`,
+			fg: severity === "warning" ? gruvbox.bg : gruvbox.fg0,
+			bg: severityColor(severity),
+		}));
+}
+
+function formatArgValue(value: unknown) {
+	if (typeof value !== "string") return String(value);
+	return value.replace(/^@/, "");
+}
+
+function lspTextOutput(result: LspToolResult | undefined): string {
+	return (
+		result?.content
+			?.filter(
+				(content) =>
+					content.type === "text" && typeof content.text === "string",
+			)
+			.map((content) => content.text ?? "")
+			.join("\n")
+			.trimEnd() ?? ""
 	);
+}
+
+function splitTextLines(text: string): string[] {
+	return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+}
+
+function colorizeLspLine(line: string, theme: any): string {
+	const match = line.match(
+		/^(?<prefix>-\s+.*?:\d+:\d+:\s+)(?<severity>error|warning|info|hint|unknown)(?<suffix>.*)$/,
+	);
+	if (!match?.groups) return line;
+	const severity = match.groups.severity as DiagnosticSeverity;
+	const token = severityThemeToken(severity);
+	return `${theme.fg("muted", match.groups.prefix)}${theme.fg(token, severity)}${theme.fg("toolOutput", match.groups.suffix ?? "")}`;
+}
+
+type DiagnosticSeverity = "error" | "warning" | "info" | "hint" | "unknown";
+
+function diagnosticsFromDetails(details: unknown): Diagnostic[] {
+	if (!details || typeof details !== "object") return [];
+	const diagnostics = (details as { diagnostics?: unknown }).diagnostics;
+	if (!Array.isArray(diagnostics)) return [];
+	return diagnostics.filter(isDiagnostic);
+}
+
+function isFailedLspDetails(details: unknown): boolean {
+	return (
+		typeof details === "object" &&
+		details !== null &&
+		(details as { ok?: unknown }).ok === false
+	);
+}
+
+function isDiagnostic(value: unknown): value is Diagnostic {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		typeof (value as Diagnostic).file === "string" &&
+		typeof (value as Diagnostic).line === "number" &&
+		typeof (value as Diagnostic).character === "number" &&
+		typeof (value as Diagnostic).severity === "string" &&
+		typeof (value as Diagnostic).message === "string"
+	);
+}
+
+function severityCounts(
+	diagnostics: Diagnostic[],
+): Record<DiagnosticSeverity, number> {
+	const counts: Record<DiagnosticSeverity, number> = {
+		error: 0,
+		warning: 0,
+		info: 0,
+		hint: 0,
+		unknown: 0,
+	};
+	for (const diagnostic of diagnostics) {
+		const severity = normalizeDiagnosticSeverity(diagnostic.severity);
+		counts[severity] += 1;
+	}
+	return counts;
+}
+
+function normalizeDiagnosticSeverity(severity: string): DiagnosticSeverity {
+	if (
+		severity === "error" ||
+		severity === "warning" ||
+		severity === "info" ||
+		severity === "hint"
+	) {
+		return severity;
+	}
+	return "unknown";
+}
+
+function severityColor(severity: DiagnosticSeverity): string {
+	if (severity === "error") return gruvbox.red;
+	if (severity === "warning") return gruvbox.yellow;
+	if (severity === "info") return gruvbox.blue;
+	if (severity === "hint") return gruvbox.aqua;
+	return gruvbox.bg3;
+}
+
+function severityThemeToken(
+	severity: DiagnosticSeverity,
+): "error" | "warning" | "accent" | "success" | "muted" {
+	if (severity === "error") return "error";
+	if (severity === "warning") return "warning";
+	if (severity === "info") return "accent";
+	if (severity === "hint") return "success";
+	return "muted";
 }
 
 class LspClient {
@@ -1023,6 +1487,15 @@ function uniqueLines(value: string): string[] {
 				.filter(Boolean),
 		),
 	];
+}
+
+async function fileExists(file: string) {
+	try {
+		await access(file);
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 async function commandPath(

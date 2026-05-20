@@ -6,22 +6,21 @@
 }: let
   cfg = config.programs.pi;
 
-  defaultEnabledModels = [
-    "openai-codex/gpt-5.4"
-    "openai-codex/gpt-5.5"
-    "github-copilot/gpt-5.4"
-    "github-copilot/gpt-5.5"
-    "github-copilot/claude-opus-4.6"
-    "opencode-go/kimi-k2.6"
-    "opencode-go/deepseek-v4-pro"
-  ];
+  settings =
+    {
+      theme = "gruvbox";
+      hideThinkingBlock = false;
+      enableSkillCommands = true;
+    }
+    // lib.optionalAttrs (cfg.enabledModels != []) {
+      enabledModels = cfg.enabledModels;
+    };
 
-  settings = {
-    theme = "gruvbox";
-    hideThinkingBlock = false;
-    enableSkillCommands = true;
-    enabledModels = cfg.enabledModels;
-  };
+  piAgentDir = pkgs.runCommand "pi-agent-dir" {} ''
+    mkdir -p $out
+    cp -R ${./pi/components} $out/components
+    cp -R ${./pi/extensions} $out/extensions
+  '';
 
   piSkills = pkgs.runCommand "pi-skills" {} ''
     mkdir -p $out
@@ -76,8 +75,8 @@
       customMessageText = "";
       customMessageLabel = "yellow";
       toolPendingBg = "bg1";
-      toolSuccessBg = "#1e2e1e";
-      toolErrorBg = "#2e1e1e";
+      toolSuccessBg = "bg1";
+      toolErrorBg = "bg1";
       toolTitle = "yellow";
       toolOutput = "";
       mdHeading = "orange";
@@ -119,12 +118,15 @@
 in {
   options.programs.pi.enabledModels = lib.mkOption {
     type = lib.types.listOf lib.types.str;
-    default = defaultEnabledModels;
+    default = [];
     example = [
       "github-copilot/claude-opus-4.6"
       "openai-codex/gpt-5.5"
     ];
-    description = "Pi model IDs to enable in ~/.pi/agent/settings.json.";
+    description = ''
+      Pi model IDs to enable in ~/.pi/agent/settings.json.
+      Optional; if empty, no prioritized models are set.
+    '';
   };
 
   config = {
@@ -153,8 +155,8 @@ in {
       ".pi/agent/settings.json".text = builtins.toJSON settings;
       ".pi/agent/themes/gruvbox.json".text = builtins.toJSON gruvboxTheme;
       ".pi/agent/AGENTS.md".source = ../global-instructions.md;
-      ".pi/agent/components".source = ./pi/components;
-      ".pi/agent/extensions".source = ./pi/extensions;
+      ".pi/agent/components".source = piAgentDir + "/components";
+      ".pi/agent/extensions".source = piAgentDir + "/extensions";
       ".pi/agent/skills".source = piSkills;
       ".pi/agent/prompts".source = ../prompts;
     };

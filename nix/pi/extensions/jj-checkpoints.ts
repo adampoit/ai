@@ -11,6 +11,12 @@ import {
 	Input,
 	truncateToWidth,
 } from "@mariozechner/pi-tui";
+import {
+	BlockFrame,
+	gruvbox,
+	KeyHintLine,
+	renderBadge,
+} from "../components/index.ts";
 import type { Focusable } from "@mariozechner/pi-tui";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -108,7 +114,8 @@ function stringField(
 
 function summarizeToolCall(event: ToolCallEvent): string {
 	const input = event.input as Record<string, unknown>;
-	if (event.toolName === "bash") return stringField(input, "command") ?? "bash";
+	if (event.toolName === "bash")
+		return stringField(input, "command") ?? "bash";
 	if (event.toolName === "read")
 		return stringField(input, "path", "filePath") ?? "read";
 	if (event.toolName === "edit")
@@ -138,10 +145,9 @@ function shortenPath(path: string): string {
 function formatToolCall(name: string, args: Record<string, unknown>): string {
 	switch (name) {
 		case "bash": {
-			const command = normalizeDisplayText(String(args.command || "")).slice(
-				0,
-				50,
-			);
+			const command = normalizeDisplayText(
+				String(args.command || ""),
+			).slice(0, 50);
 			return `[bash: ${command}${command.length === 50 ? "..." : ""}]`;
 		}
 		case "read": {
@@ -151,7 +157,8 @@ function formatToolCall(name: string, args: Record<string, unknown>): string {
 			let display = path;
 			if (offset !== undefined || limit !== undefined) {
 				const start = Number(offset ?? 1);
-				const end = limit !== undefined ? start + Number(limit) - 1 : "";
+				const end =
+					limit !== undefined ? start + Number(limit) - 1 : "";
 				display += `:${start}${end ? `-${end}` : ""}`;
 			}
 			return `[read: ${display}]`;
@@ -231,7 +238,8 @@ function extractMessageText(content: unknown): string {
 }
 
 function entryToolCalls(entry: SessionEntry): ToolCallBlock[] {
-	if (entry.type !== "message" || entry.message.role !== "assistant") return [];
+	if (entry.type !== "message" || entry.message.role !== "assistant")
+		return [];
 	const content = (entry.message as { content?: unknown }).content;
 	if (!Array.isArray(content)) return [];
 	return content.filter(
@@ -346,7 +354,9 @@ class RewindSelector extends Container implements Focusable {
 		const tokens = query.split(/\s+/).filter(Boolean);
 		this.filteredRows = tokens.length
 			? this.rows.filter((row) =>
-					tokens.every((token) => row.searchText.toLowerCase().includes(token)),
+					tokens.every((token) =>
+						row.searchText.toLowerCase().includes(token),
+					),
 				)
 			: this.rows;
 		this.selectedIndex = Math.min(
@@ -402,22 +412,60 @@ class RewindSelector extends Container implements Focusable {
 	}
 
 	render(width: number): string[] {
+		const checkpointCount = this.rows.filter(
+			(row) => row.checkpoint,
+		).length;
+		return new BlockFrame(
+			{
+				invalidate() {},
+				render: (contentWidth: number) => this.renderBody(contentWidth),
+			},
+			{
+				title: {
+					title: "Rewind Checkpoints",
+					icon: "⟲",
+					accent: gruvbox.yellow,
+					badges: [
+						{
+							text: `${checkpointCount} checkpoints`,
+							bg: gruvbox.bg2,
+						},
+						{
+							text: `${this.filteredRows.length}/${this.rows.length}`,
+							bg: gruvbox.bg2,
+						},
+					],
+					theme: this.theme,
+				},
+				borderColor: gruvbox.yellow,
+				background: gruvbox.bg1,
+				theme: this.theme,
+				paddingX: 1,
+				paddingY: 1,
+			},
+		).render(width);
+	}
+
+	private renderBody(width: number): string[] {
 		const lines: string[] = [];
-		lines.push(this.theme.bold("   Rewind Checkpoints"));
 		lines.push(
-			this.theme.fg(
-				"muted",
-				"  ↑/↓: move. ←/→: page. enter: restore checkpoint. escape: cancel",
-			),
+			...new KeyHintLine(
+				[
+					{ key: "↑↓", label: "move" },
+					{ key: "←→", label: "page" },
+					{ key: "enter", label: "restore checkpoint" },
+					{ key: "esc", label: "cancel" },
+				],
+				{ theme: this.theme, accent: gruvbox.yellow },
+			).render(width),
 		);
-		lines.push("  Type to search:");
+		lines.push("", this.theme.fg("muted", "Type to search:"));
 		lines.push(...this.search.render(width));
-		lines.push("─".repeat(width));
 		lines.push("");
 
 		if (this.filteredRows.length === 0) {
-			lines.push(this.theme.fg("muted", "  No entries found"));
-			lines.push(this.theme.fg("muted", "  (0/0)"));
+			lines.push(this.theme.fg("muted", "No entries found"));
+			lines.push(this.theme.fg("muted", "(0/0)"));
 			return lines;
 		}
 
@@ -443,9 +491,21 @@ class RewindSelector extends Container implements Focusable {
 				);
 			}
 			if (row.kind === "message" && row.text.includes("user:")) {
-				text = row.text.replace("user:", this.theme.fg("accent", "user:"));
+				text = row.text.replace(
+					"user:",
+					this.theme.fg("accent", "user:"),
+				);
 			}
-			if (row.checkpoint) text += this.theme.fg("dim", "  ⟲");
+			if (row.checkpoint) {
+				text += ` ${renderBadge({
+					text: "checkpoint",
+					icon: "⟲",
+					fg: gruvbox.bg,
+					bg: gruvbox.green,
+					theme: this.theme,
+					paddingX: 1,
+				})}`;
+			}
 			let line = cursor + text;
 			if (selected) line = this.theme.bg("selectedBg", line);
 			lines.push(truncateToWidth(line, width));
@@ -453,7 +513,7 @@ class RewindSelector extends Container implements Focusable {
 		lines.push(
 			this.theme.fg(
 				"muted",
-				`  (${this.selectedIndex + 1}/${this.filteredRows.length})`,
+				`(${this.selectedIndex + 1}/${this.filteredRows.length})`,
 			),
 		);
 		return lines;
@@ -472,7 +532,8 @@ async function selectCheckpoint(
 				done,
 				Math.max(
 					8,
-					((tui as { terminal?: { rows?: number } }).terminal?.rows ?? 30) - 10,
+					((tui as { terminal?: { rows?: number } }).terminal?.rows ??
+						30) - 10,
 				),
 			),
 		{ overlay: false },
@@ -576,9 +637,12 @@ async function restoreCheckpoint(
 		} else if (
 			ctx.sessionManager.getLeafId() !== checkpoint.conversationLeafId
 		) {
-			const navigation = await ctx.navigateTree(checkpoint.conversationLeafId, {
-				summarize: false,
-			});
+			const navigation = await ctx.navigateTree(
+				checkpoint.conversationLeafId,
+				{
+					summarize: false,
+				},
+			);
 			if (navigation.cancelled) {
 				ctx.ui.notify(
 					`Restored jj operation ${checkpoint.op}, but conversation rewind was cancelled`,
@@ -627,14 +691,19 @@ export default function (pi: ExtensionAPI) {
 			if (target === "last") {
 				checkpoint = checkpoints[0];
 			} else if (target) {
-				checkpoint = checkpoints.find((item) => item.op.startsWith(target));
+				checkpoint = checkpoints.find((item) =>
+					item.op.startsWith(target),
+				);
 			} else {
 				checkpoint = await selectCheckpoint(ctx, checkpoints);
 				if (!checkpoint) return;
 			}
 
 			if (!checkpoint) {
-				ctx.ui.notify(`No matching jj checkpoint: ${target}`, "warning");
+				ctx.ui.notify(
+					`No matching jj checkpoint: ${target}`,
+					"warning",
+				);
 				return;
 			}
 

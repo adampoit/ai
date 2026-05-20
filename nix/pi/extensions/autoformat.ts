@@ -2,8 +2,8 @@ import type {
 	ExtensionAPI,
 	ExtensionContext,
 } from "@mariozechner/pi-coding-agent";
-import { DynamicBorder } from "@mariozechner/pi-coding-agent";
 import { truncateToWidth } from "@mariozechner/pi-tui";
+import { BlockFrame, gruvbox, KeyHintLine } from "../components/index.ts";
 import {
 	existsSync,
 	mkdtempSync,
@@ -25,12 +25,37 @@ type ToolResultDetails = {
 
 const FORMAT_TIMEOUT_MS = 15000;
 
+function isStaleContextError(error: unknown): boolean {
+	return (
+		error instanceof Error &&
+		error.message.includes("extension ctx is stale")
+	);
+}
+
 function setFormatterStatus(
 	ctx: ExtensionContext,
 	color: "dim" | "success" | "warning" | "error",
 	status: string,
-): void {
-	ctx.ui.setStatus("autoformat", ctx.ui.theme.fg(color, `fmt: ${status}`));
+): boolean {
+	try {
+		ctx.ui.setStatus(
+			"autoformat",
+			ctx.ui.theme.fg(color, `fmt: ${status}`),
+		);
+		return true;
+	} catch (error) {
+		if (isStaleContextError(error)) return false;
+		throw error;
+	}
+}
+
+function notifyFormatterWarning(ctx: ExtensionContext, message: string): void {
+	try {
+		ctx.ui.notify(message, "warning");
+	} catch (error) {
+		if (isStaleContextError(error)) return;
+		throw error;
+	}
 }
 
 function formatFormatterSummary(
@@ -78,24 +103,60 @@ async function showToggleView(
 	await ctx.ui.custom<void>(
 		(tui, theme, kb, done) => {
 			let showAll = false;
-			const border = new DynamicBorder((text) =>
-				theme.fg("border", text),
-			);
 			return {
 				render(width: number) {
-					const lines = [
-						theme.fg(
-							"dim",
-							`t: ${showAll ? "show on only" : "show all configured"} • esc: close`,
-						),
-						"",
-						...formatOnOffSections(title, entries, showAll).split(
-							"\n",
-						),
-						"",
-						border.render(width)[0] ?? "",
-					];
-					return lines.map((line) => truncateToWidth(line, width));
+					const onCount = entries.filter((entry) => entry.on).length;
+					const offCount = entries.length - onCount;
+					return new BlockFrame(
+						{
+							invalidate() {},
+							render(contentWidth: number) {
+								const help = new KeyHintLine(
+									[
+										{
+											key: "t",
+											label: showAll
+												? "show on only"
+												: "show all configured",
+										},
+										{ key: "esc", label: "close" },
+									],
+									{ theme, accent: gruvbox.orange },
+								).render(contentWidth);
+								return [
+									...help,
+									"",
+									...formatOnOffSections(
+										title,
+										entries,
+										showAll,
+									).split("\n"),
+								].map((line) =>
+									truncateToWidth(line, contentWidth),
+								);
+							},
+						},
+						{
+							title: {
+								title,
+								icon: "󰉢",
+								accent: gruvbox.orange,
+								badges: [
+									{ text: `${onCount} on`, bg: gruvbox.bg2 },
+									{
+										text: `${offCount} off`,
+										bg: gruvbox.bg2,
+									},
+								],
+								theme,
+							},
+							borderColor: gruvbox.orange,
+							background: gruvbox.bg1,
+							theme,
+							paddingX: 1,
+							paddingY: 1,
+						},
+					).render(width);
 				},
 				invalidate() {},
 				handleInput(data: string) {
@@ -410,16 +471,21 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		refreshFormatterStatus(pi, ctx).catch((error) => {
-			setFormatterStatus(ctx, "error", "error");
-			ctx.ui.notify(
+			if (isStaleContextError(error)) return;
+			if (!setFormatterStatus(ctx, "error", "error")) return;
+			notifyFormatterWarning(
+				ctx,
 				`Formatter status failed: ${error instanceof Error ? error.message : String(error)}`,
-				"warning",
 			);
 		});
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
-		ctx.ui.setStatus("autoformat", "");
+		try {
+			ctx.ui.setStatus("autoformat", "");
+		} catch (error) {
+			if (!isStaleContextError(error)) throw error;
+		}
 	});
 
 	pi.on("tool_result", async (event, ctx) => {
@@ -475,9 +541,9 @@ export default function (pi: ExtensionAPI) {
 				result.stdout ||
 				"formatter failed"
 			).trim();
-			ctx.ui.notify(
+			notifyFormatterWarning(
+				ctx,
 				`Formatter failed using ${commandName}: ${output}`,
-				"warning",
 			);
 			await refreshFormatterStatus(pi, ctx);
 			return;

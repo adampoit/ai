@@ -115,6 +115,40 @@ async function hasWorkingTreeChanges(
 	return false;
 }
 
+async function inferJjCurrentRange(
+	pi: ExtensionAPI,
+	cwd: string,
+): Promise<string | undefined> {
+	const result = await tryExec(pi, cwd, "jj", [
+		"log",
+		"--no-graph",
+		"-r",
+		"@",
+		"-T",
+		'parents.map(|c| c.commit_id()).join(" ") ++ "\n" ++ commit_id ++ "\n"',
+	]);
+	if (result?.code !== 0) return undefined;
+
+	const [parentsLine, head] = result.stdout
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.filter(Boolean);
+	const base = parentsLine?.split(/\s+/)[0];
+	if (!base || !head) return undefined;
+
+	return `${base}..${head}`;
+}
+
+async function inferDefaultDiffTarget(
+	pi: ExtensionAPI,
+	cwd: string,
+): Promise<string | undefined> {
+	const jjRange = await inferJjCurrentRange(pi, cwd);
+	if (jjRange) return jjRange;
+
+	return (await hasWorkingTreeChanges(pi, cwd)) ? undefined : "HEAD~1..HEAD";
+}
+
 async function inferGitHeadRefs(
 	pi: ExtensionAPI,
 	cwd: string,
@@ -242,7 +276,7 @@ function isRemotePrReview(args: string): boolean {
 	return parts[0] === "pr" && parts[1] === "remote";
 }
 
-async function codeDiffArgs(
+async function reviewLocalArgs(
 	pi: ExtensionAPI,
 	cwd: string,
 	args: string,
@@ -251,9 +285,7 @@ async function codeDiffArgs(
 	let diffTarget: string | undefined;
 
 	if (parts.length === 0) {
-		diffTarget = (await hasWorkingTreeChanges(pi, cwd))
-			? undefined
-			: "HEAD~1 HEAD";
+		diffTarget = await inferDefaultDiffTarget(pi, cwd);
 	} else if (parts[0] === "pr") {
 		const prNumber = parts[1] ?? (await inferPrNumber(pi, cwd));
 		if (!prNumber) {
@@ -263,9 +295,11 @@ async function codeDiffArgs(
 		}
 		const baseRef = await inferPrBaseRef(pi, cwd, prNumber);
 		if (!baseRef) {
-			throw new Error(`Could not infer the base branch for PR ${prNumber}.`);
+			throw new Error(
+				`Could not infer the base branch for PR ${prNumber}.`,
+			);
 		}
-		diffTarget = `origin/${baseRef} HEAD`;
+		diffTarget = `origin/${baseRef}...`;
 	} else if (hasRevisionArg(parts)) {
 		const revisionIndex = parts.findIndex(
 			(part) => part === "-r" || part === "--revisions",
@@ -275,7 +309,7 @@ async function codeDiffArgs(
 		diffTarget = parts.join(" ");
 	}
 
-	const command = diffTarget ? `CodeDiff ${diffTarget}` : "CodeDiff";
+	const command = diffTarget ? `ReviewLocal ${diffTarget}` : "ReviewLocal";
 	return ["-c", command];
 }
 
@@ -300,7 +334,7 @@ function formatLocalReviewForAgent(review: string): string {
 		"",
 		review.trim(),
 		"",
-		"<sub>Reviewed locally with Neovim, CodeDiff, and unified-review.nvim.</sub>",
+		"<sub>Reviewed locally with Neovim and unified-review.nvim.</sub>",
 	].join("\n");
 }
 
@@ -331,7 +365,7 @@ export default function (pi: ExtensionAPI) {
 							"Remote GitHub PR review is not supported yet. Use /review pr to review the PR diff locally.",
 						);
 					}
-					runArgs = await codeDiffArgs(pi, ctx.cwd, args);
+					runArgs = await reviewLocalArgs(pi, ctx.cwd, args);
 					gitEnv = await jjGitEnv(pi, ctx.cwd);
 				} catch (error) {
 					ctx.ui.notify(
@@ -350,6 +384,19 @@ export default function (pi: ExtensionAPI) {
 						"vim.api.nvim_create_autocmd('VimLeavePre', { callback = function()",
 						`  pcall(vim.cmd, 'ReviewSave ${reviewPath.replace(/'/g, "''")}')`,
 						"end })",
+						"",
+						"vim.api.nvim_create_autocmd('VimEnter', {",
+						"  once = true,",
+						"  callback = function()",
+						"    vim.defer_fn(function()",
+						"      for _, buf in ipairs(vim.api.nvim_list_bufs()) do",
+						"        if vim.api.nvim_buf_get_name(buf) == '' and not vim.bo[buf].modified then",
+						"          pcall(vim.api.nvim_buf_delete, buf, { force = true })",
+						"        end",
+						"      end",
+						"    end, 150)",
+						"  end,",
+						"})",
 					].join("\n") + "\n",
 				);
 
@@ -367,7 +414,15 @@ export default function (pi: ExtensionAPI) {
 
 						const child = spawnSync(
 							"nvim",
-							["-S", initPath, ...runArgs],
+							[
+								"--cmd",
+								"let g:auto_session_enabled = v:false",
+								"--cmd",
+								"lua vim.g.session_autoload = false",
+								"-S",
+								initPath,
+								...runArgs,
+							],
 							{
 								cwd: ctx.cwd,
 								env: { ...process.env, ...gitEnv },

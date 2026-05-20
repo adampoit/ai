@@ -4,13 +4,15 @@ import type {
 	ExtensionCommandContext,
 	ExtensionContext,
 } from "@mariozechner/pi-coding-agent";
-import { Box, Key, matchesKey, truncateToWidth } from "@mariozechner/pi-tui";
-
-const REQUEST_TIMEOUT_MS = 12_000;
-const OPENAI_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
-const COPILOT_USER_URL = "https://api.github.com/copilot_internal/user";
-const OPENCODE_GO_DASHBOARD_PREFIX = "https://opencode.ai/workspace/";
-const OPENCODE_GO_DASHBOARD_SUFFIX = "/go";
+import { Key, matchesKey, truncateToWidth } from "@mariozechner/pi-tui";
+import {
+	BlockFrame,
+	gruvbox,
+	KeyHintLine,
+	renderBadge,
+	renderMeter,
+} from "../components/ui/index.ts";
+// ── shared quota types ────────────────────────────────────────────────
 
 export type UsageWindow = {
 	label: string;
@@ -28,6 +30,107 @@ export type ProviderUsage = {
 	message?: string;
 	windows?: UsageWindow[];
 };
+
+type QuotaStatus = "ok" | "warn" | "error";
+
+// ── shared quota helpers ──────────────────────────────────────────────
+
+export function quotaLabel(label: string): string {
+	const normalized = label.toLowerCase();
+	if (normalized === "primary" || normalized.includes("5h")) return "5h";
+	if (normalized === "secondary" || normalized.includes("week")) return "wk";
+	if (normalized.includes("month")) return "mo";
+	if (normalized.includes("premium")) return "req";
+	return label;
+}
+
+function quotaDurationMs(
+	provider: string,
+	window: UsageWindow,
+): number | undefined {
+	const label = quotaLabel(window.label);
+	if (label === "5h") return 5 * 60 * 60 * 1000;
+	if (label === "wk") return 7 * 24 * 60 * 60 * 1000;
+	if (label === "mo" || provider === "GitHub Copilot")
+		return 30 * 24 * 60 * 60 * 1000;
+}
+
+export function resetEta(window: UsageWindow): string | undefined {
+	if (!window.resetAt) return undefined;
+	const ms = new Date(window.resetAt).getTime() - Date.now();
+	if (!Number.isFinite(ms)) return undefined;
+	const minutes = Math.max(0, Math.round(ms / 60000));
+	if (minutes < 60) return `${minutes}m`;
+	const hours = Math.round(minutes / 60);
+	if (hours < 48) return `${hours}h`;
+	return `${Math.round(hours / 24)}d`;
+}
+
+export function quotaPace(
+	provider: string,
+	window: UsageWindow,
+): number | undefined {
+	if (window.remaining !== undefined && window.remaining < 0) return Infinity;
+	if (window.percentRemaining === undefined || !window.resetAt)
+		return undefined;
+	const duration = quotaDurationMs(provider, window);
+	if (!duration) return undefined;
+	const remainingMs = Math.max(
+		0,
+		new Date(window.resetAt).getTime() - Date.now(),
+	);
+	const elapsedPercent = Math.max(
+		1,
+		((duration - remainingMs) / duration) * 100,
+	);
+	const usedPercent = 100 - window.percentRemaining;
+	return usedPercent / elapsedPercent;
+}
+
+export function paceColor(pace: number | undefined): QuotaStatus {
+	if (pace === Infinity || (pace !== undefined && pace > 1.25))
+		return "error";
+	if (pace !== undefined && pace > 1) return "warn";
+	return "ok";
+}
+
+function burnRateWindows(windows: UsageWindow[]): UsageWindow[] {
+	return windows.filter((window) => quotaLabel(window.label) !== "5h");
+}
+
+export function limitingWindow(
+	provider: string,
+	windows: UsageWindow[],
+): UsageWindow | undefined {
+	return burnRateWindows(windows).reduce<UsageWindow | undefined>(
+		(worst, window) => {
+			if (!worst) return window;
+			const worstPace = quotaPace(provider, worst) ?? -1;
+			const pace = quotaPace(provider, window) ?? -1;
+			return pace > worstPace ? window : worst;
+		},
+		undefined,
+	);
+}
+
+export function quotaBar(
+	percentRemaining: number | undefined,
+	width: number,
+): string {
+	if (percentRemaining === undefined) return "·".repeat(width);
+	const clamp = (v: number) => Math.max(0, Math.min(100, v));
+	const used = clamp(100 - percentRemaining);
+	const filled = Math.round((used / 100) * width);
+	return `${"█".repeat(filled)}${"░".repeat(width - filled)}`;
+}
+
+// ── constants ─────────────────────────────────────────────────────────
+
+const REQUEST_TIMEOUT_MS = 12_000;
+const OPENAI_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
+const COPILOT_USER_URL = "https://api.github.com/copilot_internal/user";
+const OPENCODE_GO_DASHBOARD_PREFIX = "https://opencode.ai/workspace/";
+const OPENCODE_GO_DASHBOARD_SUFFIX = "/go";
 
 type JsonObject = Record<string, unknown>;
 
@@ -783,54 +886,74 @@ function windowParts(window: UsageWindow): string[] {
 	].filter((part): part is string => Boolean(part));
 }
 
-function usageBar(percentRemaining: number | undefined, width: number): string {
-	const barWidth = Math.max(4, width);
-	if (percentRemaining === undefined) return "·".repeat(barWidth);
-	const usedPercent = 100 - clampPercent(percentRemaining)!;
-	const filled = Math.round((usedPercent / 100) * barWidth);
-	return `${"█".repeat(filled)}${"░".repeat(barWidth - filled)}`;
-}
-
 function usageStatus(result: ProviderUsage): "ok" | "warn" | "error" {
 	if (result.status === "error") return "error";
 	if (result.status === "unavailable") return "warn";
-	const remaining = (result.windows ?? [])
-		.map((window) => window.percentRemaining)
-		.filter((value): value is number => value !== undefined);
-	if (remaining.some((value) => value <= 10)) return "error";
-	if (remaining.some((value) => value <= 25)) return "warn";
+	const windows = result.windows ?? [];
+	// Prefer burn rate when available
+	const limiting = limitingWindow(result.provider, windows);
+	if (limiting) {
+		const pace = quotaPace(result.provider, limiting);
+		if (pace !== undefined) {
+			const status = paceColor(pace);
+			if (status !== "ok") return status;
+			return "ok";
+		}
+	}
+	// Fallback: simple percentage thresholds
+	const remaining = windows
+		.map((w) => w.percentRemaining)
+		.filter((v): v is number => v !== undefined);
+	if (remaining.some((v) => v <= 10)) return "error";
+	if (remaining.some((v) => v <= 25)) return "warn";
 	return "ok";
 }
 
-function renderUsageReport(
+function windowBarColor(provider: string, window: UsageWindow): string {
+	if (window.percentRemaining === undefined) return "muted";
+	// Prefer burn rate when available
+	const pace = quotaPace(provider, window);
+	if (pace !== undefined) {
+		const status = paceColor(pace);
+		if (status === "error") return "error";
+		if (status === "warn") return "warning";
+		return "success";
+	}
+	// Fallback: simple percentage thresholds
+	if (window.percentRemaining <= 10) return "error";
+	if (window.percentRemaining <= 25) return "warning";
+	return "success";
+}
+function renderUsageContent(
 	providers: ProviderUsage[],
 	localUsage: string,
 	theme: any,
 ) {
-	const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
-	box.addChild({
+	return {
 		invalidate() {},
-		render(width: number): string[] {
-			const contentWidth = Math.max(20, width - 2);
-			const barWidth = Math.max(8, Math.min(24, contentWidth - 34));
-			const lines = [
-				theme.fg("accent", theme.bold("AI Usage")),
-				theme.fg("dim", "Subscription quotas"),
-			];
+		render(contentWidth: number): string[] {
+			const meterWidth = Math.max(8, Math.min(24, contentWidth - 34));
+			const lines = [theme.fg("dim", "Subscription quotas")];
 
 			for (const provider of providers) {
 				const status = usageStatus(provider);
-				const color =
+				const statusColor =
 					status === "ok"
-						? "success"
+						? gruvbox.green
 						: status === "warn"
-							? "warning"
-							: "error";
-				const icon =
-					status === "ok" ? "●" : status === "warn" ? "▲" : "●";
+							? gruvbox.yellow
+							: gruvbox.red;
+				const statusText =
+					provider.status === "ok" ? status : provider.status;
+				const statusBadge = renderBadge({
+					text: statusText,
+					fg: gruvbox.bg,
+					bg: statusColor,
+					theme,
+				});
 				lines.push(
 					truncateToWidth(
-						`${theme.fg(color, icon)} ${theme.fg("customMessageLabel", provider.provider)}${provider.status === "ok" ? "" : ` — ${provider.status}`}`,
+						`${statusBadge} ${theme.fg("customMessageLabel", provider.provider)}`,
 						contentWidth,
 					),
 				);
@@ -846,15 +969,30 @@ function renderUsageReport(
 				}
 
 				for (const window of provider.windows ?? []) {
-					const used = theme.fg(
-						color,
-						usageBar(window.percentRemaining, barWidth),
-					);
+					const meter = renderMeter({
+						value:
+							window.percentRemaining === undefined
+								? undefined
+								: 1 - window.percentRemaining / 100,
+						width: meterWidth,
+						fg: windowBarColor(provider.provider, window),
+						emptyFg: gruvbox.bg3,
+						theme,
+					});
+					const label = renderBadge({
+						text: quotaLabel(window.label),
+						fg: gruvbox.fg0,
+						bg: gruvbox.bg2,
+						theme,
+						paddingX: 1,
+					});
 					const parts =
 						windowParts(window).join(" · ") || "available";
+					const eta = resetEta(window);
+					const etaText = eta ? ` ↻ ${eta}` : "";
 					lines.push(
 						truncateToWidth(
-							`  ${used} ${window.label}: ${parts}${formatReset(window.resetAt)}`,
+							`  ${meter} ${label} ${parts}${formatReset(window.resetAt)}${etaText}`,
 							contentWidth,
 						),
 					);
@@ -865,14 +1003,14 @@ function renderUsageReport(
 			lines.push(
 				...localUsage
 					.split("\n")
-					.map((line) => truncateToWidth(`  ${line}`, contentWidth)),
+					.map((line) =>
+						truncateToWidth(`  ${line}`, contentWidth),
+					),
 			);
 			return lines;
 		},
-	});
-	return box;
+	};
 }
-
 function decodePlaywrightString(value: string): string {
 	try {
 		const parsed = JSON.parse(value) as unknown;
@@ -1023,8 +1161,6 @@ export default function usageExtension(pi: ExtensionAPI) {
 				return;
 			}
 
-			ctx.ui.notify("Checking AI usage…", "info");
-
 			const providers = await Promise.all([
 				openAiUsage(ctx),
 				copilotUsage(ctx),
@@ -1032,27 +1168,86 @@ export default function usageExtension(pi: ExtensionAPI) {
 			]);
 			const localUsage = localSessionUsage(ctx);
 
-			await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
-				const report = renderUsageReport(providers, localUsage, theme);
-				return {
-					invalidate: () => report.invalidate(),
-					render: (width: number) => [
-						...report.render(width),
-						theme.fg("dim", "esc/enter/q close"),
-					],
-					handleInput: (data: string) => {
-						if (
-							matchesKey(data, Key.escape) ||
-							matchesKey(data, Key.enter) ||
-							data === "q"
-						) {
-							done();
-							return;
-						}
-						tui.requestRender();
-					},
-				};
-			});
+			await ctx.ui.custom<void>(
+				(tui, theme, kb, done) => {
+					const content = renderUsageContent(
+						providers,
+						localUsage,
+						theme,
+					);
+					return {
+						render(width: number) {
+							return new BlockFrame(
+								{
+									invalidate() {},
+									render(contentWidth: number) {
+										const help = new KeyHintLine(
+											[
+												{
+													key: "esc",
+													label: "close",
+												},
+												{
+													key: "enter",
+													label: "close",
+												},
+												{
+													key: "q",
+													label: "close",
+												},
+											],
+											{
+												theme,
+												accent: gruvbox.aqua,
+											},
+										).render(contentWidth);
+										const body =
+											content.render(contentWidth);
+										return [...help, "", ...body];
+									},
+								},
+								{
+									title: {
+										title: "AI Usage",
+										icon: "󰚩",
+										accent: gruvbox.aqua,
+										badges: [
+											{
+												text: `${providers.length} providers`,
+												bg: gruvbox.bg2,
+											},
+										],
+										theme,
+									},
+									borderColor: gruvbox.aqua,
+									background: gruvbox.bg1,
+									theme,
+									paddingX: 1,
+									paddingY: 1,
+								},
+							).render(width);
+						},
+						invalidate() {},
+						handleInput(data: string) {
+							if (
+								kb.matches(data, "tui.select.cancel")
+							) {
+								done();
+								return;
+							}
+							if (
+								matchesKey(data, Key.enter) ||
+								data === "q"
+							) {
+								done();
+								return;
+							}
+							tui.requestRender();
+						},
+					};
+				},
+				{ overlay: false },
+			);
 		},
 	});
 }

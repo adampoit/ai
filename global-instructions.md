@@ -5,10 +5,10 @@
 ### 1. Planning First
 
 - **Always plan before coding**: Create a clear plan that includes:
-  - Files to modify or create
-  - High-level changes and their rationale
-  - Expected outcomes and potential side effects
-  - Dependencies and prerequisites
+    - Files to modify or create
+    - High-level changes and their rationale
+    - Expected outcomes and potential side effects
+    - Dependencies and prerequisites
 - **Break down complex tasks**: Decompose large tasks into smaller, manageable steps
 - **Consider edge cases**: Think through error conditions, boundary cases, and failure scenarios
 - **Validate assumptions**: Confirm your understanding with the user when requirements are ambiguous
@@ -32,14 +32,14 @@
 ### 4. Documentation
 
 - **Minimalist comments**: Use comments sparingly and strategically:
-  - Explain **why**, not **what** (the code shows what)
-  - Document complex algorithms or non-obvious logic
-  - Highlight gotchas, workarounds, or edge cases
-  - Reference tickets, issues, or external documentation when relevant
+    - Explain **why**, not **what** (the code shows what)
+    - Document complex algorithms or non-obvious logic
+    - Highlight gotchas, workarounds, or edge cases
+    - Reference tickets, issues, or external documentation when relevant
 - **Self-documenting code**: Write clear, readable code that speaks for itself:
-  - Use descriptive variable and function names
-  - Keep functions small and focused
-  - Avoid clever tricks that sacrifice clarity
+    - Use descriptive variable and function names
+    - Keep functions small and focused
+    - Avoid clever tricks that sacrifice clarity
 - **Keep documentation up to date**: Update comments and docs when changing code
 
 ### 5. Safety
@@ -54,10 +54,10 @@
 
 - **Search before installing**: Always query package registries or use package-manager search commands to find the latest versions, metadata, and compatibility rather than relying on training data.
 - **Use ecosystem CLIs and registries**: Examples:
-  - **npm**: `npm view <package> version` or `npm show <package> versions`.
-  - **Nix**: `nh search <query>` for channel-aware Nix package discovery.
-  - **dotnet**: `dotnet package search <query>`.
-  - **Other ecosystems**: use `pip index versions <package>`, `cargo search <query>`, etc., or check official registry websites.
+    - **npm**: `npm view <package> version` or `npm show <package> versions`.
+    - **Nix**: `nh search <query>` for channel-aware Nix package discovery.
+    - **dotnet**: `dotnet package search <query>`.
+    - **Other ecosystems**: use `pip index versions <package>`, `cargo search <query>`, etc., or check official registry websites.
 - **Prefer official sources**: When in doubt, reference the official package registry page rather than third-party mirrors or memory.
 
 ### Version Control
@@ -67,3 +67,10 @@
 ### Interactive Processes
 
 - **Use tmux for long-running or interactive terminal processes**: Do not use background bash for development servers, watch commands, REPLs, debuggers, log tails, or commands that need later inspection/input. Use the `tmux-interactive-processes` skill.
+
+### Modern CLI Tools
+
+- **Prefer modern replacements for classic Unix tools**: Use faster, more user-friendly alternatives when searching and discovering files:
+    - `rg` (ripgrep) over `grep` for recursive code search — respects `.gitignore` and is significantly faster
+    - `fd` over `find` for file and directory discovery — sane defaults, regex-friendly, and colorized output
+    - `jq` over manual text parsing for JSON — structured queries avoid fragile regex extraction

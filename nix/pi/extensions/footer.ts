@@ -4,58 +4,27 @@ import type {
 } from "@mariozechner/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import {
+	gruvbox,
+	PowerlineStatusLine,
+	renderPlainStatusParts,
+	renderPowerlineLeft,
+	renderPowerlineRight,
+	stripAnsi,
+	type PowerlineSegment,
+} from "../components/ui/index.ts";
+import {
 	copilotUsage,
+	limitingWindow,
 	openAiUsage,
 	openCodeGoUsage,
+	paceColor,
+	quotaBar,
+	quotaLabel,
+	quotaPace,
+	resetEta,
 	type ProviderUsage,
 	type UsageWindow,
-} from "./usage.js";
-
-const LEFT_SEPARATOR = "";
-const RIGHT_SEPARATOR = "";
-const RIGHT_NARROW_SEPARATOR = "";
-const RESET = "\x1b[0m";
-
-const gruvbox = {
-	bg: "#282828",
-	bg1: "#3c3836",
-	bg2: "#504945",
-	fg0: "#fbf1c7",
-	gray: "#a89984",
-	green: "#98971a",
-	yellow: "#d79921",
-	red: "#cc241d",
-	blue: "#458588",
-};
-
-type Block = {
-	text: string;
-	fg: string;
-	bg: string;
-};
-
-function hexToRgb(hex: string): [number, number, number] {
-	const value = hex.replace(/^#/, "");
-	return [
-		Number.parseInt(value.slice(0, 2), 16),
-		Number.parseInt(value.slice(2, 4), 16),
-		Number.parseInt(value.slice(4, 6), 16),
-	];
-}
-
-function fg(hex: string, text: string): string {
-	const [r, g, b] = hexToRgb(hex);
-	return `\x1b[38;2;${r};${g};${b}m${text}`;
-}
-
-function bg(hex: string, text: string): string {
-	const [r, g, b] = hexToRgb(hex);
-	return `\x1b[48;2;${r};${g};${b}m${text}`;
-}
-
-function style(text: string, foreground: string, background?: string): string {
-	return `${background ? bg(background, "") : ""}${fg(foreground, text)}${RESET}`;
-}
+} from "./usage.ts";
 
 function projectPath(cwd: string): string {
 	const home = process.env.HOME || process.env.USERPROFILE;
@@ -74,53 +43,6 @@ function formatStatus(text: string): string {
 		.replace(/[\r\n\t]/g, " ")
 		.replace(/ +/g, " ")
 		.trim();
-}
-
-function block(item: Block): string {
-	return style(` ${item.text} `, item.fg, item.bg);
-}
-
-function renderLeftBlocks(blocks: Block[]): string {
-	const items = blocks.filter((item) => item.text.length > 0);
-	return items
-		.map((item, index) => {
-			const next = items[index + 1];
-			const separator = next
-				? style(LEFT_SEPARATOR, item.bg, next.bg)
-				: style(LEFT_SEPARATOR, item.bg);
-			return block(item) + separator;
-		})
-		.join("");
-}
-
-function renderRightBlocks(blocks: Block[]): string {
-	const items = blocks.filter((item) => item.text.length > 0);
-	return items
-		.map((item, index) => {
-			const previous = items[index - 1];
-			const separator = previous
-				? style(RIGHT_SEPARATOR, item.bg, previous.bg)
-				: style(RIGHT_SEPARATOR, item.bg);
-			return separator + block(item);
-		})
-		.join("");
-}
-
-function renderPlainRight(parts: Array<string | Block>): string {
-	return parts
-		.filter((part) =>
-			typeof part === "string" ? part.length > 0 : part.text.length > 0,
-		)
-		.map((part) =>
-			typeof part === "string"
-				? style(part, gruvbox.gray)
-				: style(part.text, part.fg, part.bg),
-		)
-		.join(style(` ${RIGHT_NARROW_SEPARATOR} `, gruvbox.gray));
-}
-
-function stripAnsi(text: string): string {
-	return text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
 }
 
 function compactStatus(key: string, text: string): string {
@@ -153,15 +75,6 @@ async function fetchQuota(
 	if (provider === "opencode-go") return openCodeGoUsage(ctx);
 }
 
-function quotaLabel(label: string): string {
-	const normalized = label.toLowerCase();
-	if (normalized === "primary" || normalized.includes("5h")) return "5h";
-	if (normalized === "secondary" || normalized.includes("week")) return "wk";
-	if (normalized.includes("month")) return "mo";
-	if (normalized.includes("premium")) return "req";
-	return label;
-}
-
 function formatOverage(count: number): string {
 	const absolute = Math.abs(count);
 	if (absolute < 1000) return absolute.toString();
@@ -175,72 +88,6 @@ function quotaPercent(window: UsageWindow): string {
 	return window.percentRemaining === undefined
 		? "?"
 		: `${window.percentRemaining.toFixed(0)}%`;
-}
-
-function quotaDurationMs(
-	provider: string,
-	window: UsageWindow,
-): number | undefined {
-	const label = quotaLabel(window.label);
-	if (label === "5h") return 5 * 60 * 60 * 1000;
-	if (label === "wk") return 7 * 24 * 60 * 60 * 1000;
-	if (label === "mo" || provider === "GitHub Copilot")
-		return 30 * 24 * 60 * 60 * 1000;
-}
-
-function resetEta(window: UsageWindow): string | undefined {
-	if (!window.resetAt) return undefined;
-	const ms = new Date(window.resetAt).getTime() - Date.now();
-	if (!Number.isFinite(ms)) return undefined;
-	const minutes = Math.max(0, Math.round(ms / 60000));
-	if (minutes < 60) return `${minutes}m`;
-	const hours = Math.round(minutes / 60);
-	if (hours < 48) return `${hours}h`;
-	return `${Math.round(hours / 24)}d`;
-}
-
-function quotaPace(provider: string, window: UsageWindow): number | undefined {
-	if (window.remaining !== undefined && window.remaining < 0) return Infinity;
-	if (window.percentRemaining === undefined || !window.resetAt)
-		return undefined;
-	const duration = quotaDurationMs(provider, window);
-	if (!duration) return undefined;
-	const remainingMs = Math.max(
-		0,
-		new Date(window.resetAt).getTime() - Date.now(),
-	);
-	const elapsedPercent = Math.max(
-		1,
-		((duration - remainingMs) / duration) * 100,
-	);
-	const usedPercent = 100 - window.percentRemaining;
-	return usedPercent / elapsedPercent;
-}
-
-function paceColor(pace: number | undefined): string {
-	if (pace === Infinity || (pace !== undefined && pace > 1.25))
-		return gruvbox.red;
-	if (pace !== undefined && pace > 1) return gruvbox.yellow;
-	return gruvbox.green;
-}
-
-function burnRateWindows(windows: UsageWindow[]): UsageWindow[] {
-	return windows.filter((window) => quotaLabel(window.label) !== "5h");
-}
-
-function limitingWindow(
-	provider: string,
-	windows: UsageWindow[],
-): UsageWindow | undefined {
-	return burnRateWindows(windows).reduce<UsageWindow | undefined>(
-		(worst, window) => {
-			if (!worst) return window;
-			const worstPace = quotaPace(provider, worst) ?? -1;
-			const pace = quotaPace(provider, window) ?? -1;
-			return pace > worstPace ? window : worst;
-		},
-		undefined,
-	);
 }
 
 function quotaCompact(
@@ -263,7 +110,7 @@ function quotaVisual(
 function quotaVariants(
 	result: ProviderUsage | undefined,
 	loading: boolean,
-): Block[] {
+): PowerlineSegment[] {
 	if (loading) return [{ text: "quota …", fg: gruvbox.gray, bg: gruvbox.bg }];
 	if (!result)
 		return [{ text: "quota n/a", fg: gruvbox.gray, bg: gruvbox.bg }];
@@ -287,7 +134,13 @@ function quotaVariants(
 
 	const limiting = limitingWindow(result.provider, windows);
 	const pace = limiting ? quotaPace(result.provider, limiting) : undefined;
-	const color = paceColor(pace);
+	const status = paceColor(pace);
+	const color =
+		status === "error"
+			? gruvbox.red
+			: status === "warn"
+				? gruvbox.yellow
+				: gruvbox.green;
 	const compact = windows.map((window) => quotaCompact(window, limiting));
 	return [
 		{
@@ -310,13 +163,6 @@ function quotaVariants(
 	];
 }
 
-function quotaBar(percentRemaining: number | undefined, width: number): string {
-	if (percentRemaining === undefined) return "·".repeat(width);
-	const used = Math.max(0, Math.min(100, 100 - percentRemaining));
-	const filled = Math.round((used / 100) * width);
-	return `${"█".repeat(filled)}${"░".repeat(width - filled)}`;
-}
-
 function contextColor(percent: number | null | undefined): string {
 	if (percent == null) return gruvbox.gray;
 	if (percent >= 90) return gruvbox.red;
@@ -334,6 +180,39 @@ function latestThinkingLevel(
 		}
 	}
 	return level;
+}
+
+function projectSegment(cwd: string): PowerlineSegment {
+	return {
+		text: `π ${projectPath(cwd)}`,
+		fg: gruvbox.fg0,
+		bg: gruvbox.blue,
+	};
+}
+
+function branchSegment(branch: string | null): PowerlineSegment {
+	return branch
+		? {
+				text: ` ${branch}`,
+				fg: gruvbox.green,
+				bg: gruvbox.bg2,
+			}
+		: {
+				text: "",
+				fg: gruvbox.gray,
+				bg: gruvbox.bg2,
+			};
+}
+
+function modelSegment(text: string): PowerlineSegment {
+	return { text, fg: gruvbox.fg0, bg: gruvbox.bg2 };
+}
+
+function contextSegment(
+	text: string,
+	percent: number | null | undefined,
+): PowerlineSegment {
+	return { text, fg: contextColor(percent), bg: gruvbox.bg1 };
 }
 
 export default function (pi: ExtensionAPI) {
@@ -402,23 +281,9 @@ export default function (pi: ExtensionAPI) {
 						)
 						.filter(Boolean);
 
-					const left = renderLeftBlocks([
-						{
-							text: `π ${projectPath(ctx.cwd)}`,
-							fg: gruvbox.fg0,
-							bg: gruvbox.blue,
-						},
-						branch
-							? {
-									text: ` ${branch}`,
-									fg: gruvbox.green,
-									bg: gruvbox.bg2,
-								}
-							: {
-									text: "",
-									fg: gruvbox.gray,
-									bg: gruvbox.bg2,
-								},
+					const left = renderPowerlineLeft([
+						projectSegment(ctx.cwd),
+						branchSegment(branch),
 					]);
 
 					const contextPart = context
@@ -432,23 +297,15 @@ export default function (pi: ExtensionAPI) {
 					const modelWithReasoning = `${model} • ${thinkingLevel}`;
 					const quotaOptions = quotaVariants(quota, quotaLoading);
 
-					const importantRight = renderRightBlocks([
-						{
-							text: modelWithReasoning,
-							fg: gruvbox.fg0,
-							bg: gruvbox.bg2,
-						},
-						{
-							text: contextPart,
-							fg: contextColor(context?.percent),
-							bg: gruvbox.bg1,
-						},
+					const importantRight = renderPowerlineRight([
+						modelSegment(modelWithReasoning),
+						contextSegment(contextPart, context?.percent),
 					]);
 					const secondaryParts = [...statuses];
 					let quotaIndex = 0;
 					let showQuota = quotaOptions.length > 0;
 					const buildSecondary = () =>
-						renderPlainRight([
+						renderPlainStatusParts([
 							showQuota ? quotaOptions[quotaIndex] : "",
 							...secondaryParts,
 						]);
@@ -480,33 +337,12 @@ export default function (pi: ExtensionAPI) {
 							: importantRight;
 					}
 
-					const gap =
-						width - visibleWidth(left) - visibleWidth(right);
-					if (gap >= 1) return [left + " ".repeat(gap) + right];
-
-					const availableLeft = Math.max(
-						0,
-						width - visibleWidth(importantRight) - 1,
-					);
-					if (availableLeft >= 12) {
-						return [
-							truncateToWidth(
-								left,
-								availableLeft,
-								theme.fg("dim", "…"),
-							) +
-								" " +
-								importantRight,
-						];
-					}
-
-					return [
-						truncateToWidth(
-							importantRight,
-							width,
-							theme.fg("dim", "…"),
-						),
-					];
+					return new PowerlineStatusLine({
+						left,
+						right: importantRight,
+						rightPrefix: secondary,
+						ellipsis: theme.fg("dim", "…"),
+					}).render(width);
 				},
 			};
 		});
