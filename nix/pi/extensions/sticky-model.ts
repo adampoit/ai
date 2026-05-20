@@ -1,6 +1,7 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
+import { randomUUID } from "node:crypto";
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
@@ -10,9 +11,11 @@ type StickyModel = {
 	thinkingLevel?: ThinkingLevel;
 };
 
+type Store = Record<string, StickyModel>;
+
 const storePath = join(homedir(), ".pi", "agent", "sticky-models.json");
 
-async function readStore(): Promise<Record<string, StickyModel>> {
+async function readStore(): Promise<Store> {
 	try {
 		return JSON.parse(await readFile(storePath, "utf8"));
 	} catch {
@@ -20,21 +23,52 @@ async function readStore(): Promise<Record<string, StickyModel>> {
 	}
 }
 
-async function writeStore(store: Record<string, StickyModel>) {
+async function writeStore(store: Store) {
 	await mkdir(dirname(storePath), { recursive: true });
-	const tempPath = `${storePath}.${process.pid}.tmp`;
+	const tempPath = `${storePath}.${randomUUID()}.tmp`;
 	await writeFile(tempPath, `${JSON.stringify(store, null, 2)}\n`);
-	await rename(tempPath, storePath);
+	try {
+		await rename(tempPath, storePath);
+	} catch (err) {
+		await unlink(tempPath).catch(() => {});
+		throw err;
+	}
+}
+
+// Serialize all updates so concurrent handlers can't race.
+let lock: Promise<void> = Promise.resolve();
+
+function serialize<T>(fn: () => Promise<T>): Promise<T> {
+	return new Promise<T>((resolve, reject) => {
+		lock = lock.then(fn).then(resolve, reject);
+	});
+}
+
+// Load the store once into memory; all reads and writes use this cache.
+let storeCache: Store | null = null;
+
+async function getStore(): Promise<Store> {
+	if (!storeCache) storeCache = await readStore();
+	return storeCache;
+}
+
+async function updateStore(fn: (store: Store) => void) {
+	await serialize(async () => {
+		const store = await getStore();
+		fn(store);
+		await writeStore(store);
+	});
 }
 
 export default function (pi: ExtensionAPI) {
 	let applyingStickyModel = false;
 
 	pi.on("session_start", async (_event, ctx) => {
-		const saved = (await readStore())[ctx.cwd];
+		const saved = (await getStore())[ctx.cwd];
 		if (!saved) return;
 		const modelAlreadySelected =
-			ctx.model?.provider === saved.provider && ctx.model.id === saved.model;
+			ctx.model?.provider === saved.provider &&
+			ctx.model.id === saved.model;
 		if (modelAlreadySelected) {
 			if (saved.thinkingLevel) pi.setThinkingLevel(saved.thinkingLevel);
 			return;
@@ -71,26 +105,26 @@ export default function (pi: ExtensionAPI) {
 		if (applyingStickyModel) return;
 		if (event.source !== "set" && event.source !== "cycle") return;
 
-		const store = await readStore();
-		store[ctx.cwd] = {
-			provider: event.model.provider,
-			model: event.model.id,
-			thinkingLevel: pi.getThinkingLevel(),
-		};
-		await writeStore(store);
+		await updateStore((store) => {
+			store[ctx.cwd] = {
+				provider: event.model.provider,
+				model: event.model.id,
+				thinkingLevel: pi.getThinkingLevel(),
+			};
+		});
 	});
 
 	pi.on("thinking_level_select", async (event, ctx) => {
-		const store = await readStore();
-		const provider = ctx.model?.provider ?? store[ctx.cwd]?.provider;
-		const model = ctx.model?.id ?? store[ctx.cwd]?.model;
-		if (!provider || !model) return;
+		await updateStore((store) => {
+			const provider = ctx.model?.provider ?? store[ctx.cwd]?.provider;
+			const model = ctx.model?.id ?? store[ctx.cwd]?.model;
+			if (!provider || !model) return;
 
-		store[ctx.cwd] = {
-			provider,
-			model,
-			thinkingLevel: event.level,
-		};
-		await writeStore(store);
+			store[ctx.cwd] = {
+				provider,
+				model,
+				thinkingLevel: event.level,
+			};
+		});
 	});
 }
