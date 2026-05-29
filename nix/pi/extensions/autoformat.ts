@@ -23,7 +23,25 @@ type ToolResultDetails = {
 	originalContent?: string;
 } & Record<string, unknown>;
 
+type FormatResult = {
+	commandName: string;
+	changed: boolean;
+	error?: string;
+};
+
 const FORMAT_TIMEOUT_MS = 15000;
+
+const lastFormatMtime = new Map<string, number>();
+
+type FormatterCache = {
+	paths: Map<string, string>;
+	prettierPath?: string;
+	nixFormatter?: { command: string; path: string } | null;
+};
+
+const formatterCache: FormatterCache = {
+	paths: new Map(),
+};
 
 function isStaleContextError(error: unknown): boolean {
 	return (
@@ -52,6 +70,15 @@ function setFormatterStatus(
 function notifyFormatterWarning(ctx: ExtensionContext, message: string): void {
 	try {
 		ctx.ui.notify(message, "warning");
+	} catch (error) {
+		if (isStaleContextError(error)) return;
+		throw error;
+	}
+}
+
+function notifyFormatterInfo(ctx: ExtensionContext, message: string): void {
+	try {
+		ctx.ui.notify(message, "info");
 	} catch (error) {
 		if (isStaleContextError(error)) return;
 		throw error;
@@ -220,31 +247,61 @@ async function findProjectFormatterCommands(
 	pi: ExtensionAPI,
 	cwd: string,
 	signal?: AbortSignal,
-): Promise<string[]> {
-	const result = await pi.exec(
-		"bash",
-		[
-			"-lc",
-			`find . \\
-				-path './.git' -prune -o \\
-				-path './.jj' -prune -o \\
-				-path './node_modules' -prune -o \\
-				-type f -print`,
-		],
+): Promise<{ command: string; reason: string }[]> {
+	// Prefer git ls-files so we naturally respect .gitignore.
+	const gitResult = await pi.exec(
+		"git",
+		["ls-files", "--cached", "--others", "--exclude-standard"],
 		{ cwd, signal, timeout: 5000 },
 	);
-	if (result.code !== 0) return [];
+	const stdout =
+		gitResult.code === 0
+			? gitResult.stdout
+			: (
+					await pi.exec(
+						"bash",
+						[
+							"-lc",
+							`find . \\
+								-path './.git' -prune -o \\
+								-path './.jj' -prune -o \\
+								-path './node_modules' -prune -o \\
+								-type f -print`,
+						],
+						{ cwd, signal, timeout: 5000 },
+					)
+				).stdout;
+	if (!stdout) return [];
 
-	const commands = new Set<string>();
-	for (const relativePath of result.stdout.split("\n")) {
+	const triggers = new Map<string, string>();
+	const flakeNixPath = join(cwd, "flake.nix");
+	const flakeHasFmt =
+		existsSync(flakeNixPath) && flakeHasFormatter(flakeNixPath);
+
+	for (const relativePath of stdout.split("\n")) {
 		if (!relativePath) continue;
+		const ext = extname(relativePath).toLowerCase();
 		const formatter = getFormatter(relativePath);
-		if (formatter) commands.add(formatter[0] ?? "");
-		if (extname(relativePath).toLowerCase() === ".cs")
-			commands.add("dotnet");
+		if (formatter) {
+			let cmd = formatter[0] ?? "";
+			if (cmd === "alejandra" && flakeHasFmt) {
+				cmd = "nix";
+			}
+			if (cmd && !triggers.has(cmd)) {
+				triggers.set(cmd, relativePath);
+			}
+		}
+		if (ext === ".cs" && !triggers.has("dotnet")) {
+			triggers.set("dotnet", relativePath);
+		}
 	}
-	commands.delete("");
-	return [...commands].sort();
+
+	return [...triggers.entries()]
+		.map(([command, path]) => ({
+			command,
+			reason: `detected because of ${path}`,
+		}))
+		.sort((a, b) => a.command.localeCompare(b.command));
 }
 
 function getConfiguredFormatterCommands(): string[] {
@@ -264,11 +321,12 @@ async function refreshFormatterStatus(
 	ctx: ExtensionContext,
 ): Promise<void> {
 	setFormatterStatus(ctx, "dim", "󰔟 scanning");
-	const commands = await findProjectFormatterCommands(
+	const detected = await findProjectFormatterCommands(
 		pi,
 		ctx.cwd,
 		ctx.signal,
 	);
+	const commands = detected.map((d) => d.command);
 	if (commands.length === 0) {
 		setFormatterStatus(ctx, "dim", "none");
 		return;
@@ -356,6 +414,74 @@ function findLocalPrettier(file: string, cwd: string): string | undefined {
 	return undefined;
 }
 
+function findLocalPrettierFromRoot(cwd: string): string | undefined {
+	let dir = cwd;
+	while (true) {
+		const prettier = join(dir, "node_modules", ".bin", "prettier");
+		if (existsSync(prettier)) return prettier;
+		const next = dirname(dir);
+		if (next === dir) break;
+		dir = next;
+	}
+	return undefined;
+}
+
+function findFlakeNix(file: string, cwd: string): string | undefined {
+	let dir = dirname(file);
+	while (true) {
+		const flakeNix = join(dir, "flake.nix");
+		if (existsSync(flakeNix)) return flakeNix;
+		if (dir === cwd) break;
+		const next = dirname(dir);
+		if (next === dir) break;
+		dir = next;
+	}
+	return undefined;
+}
+
+function flakeHasFormatter(flakePath: string): boolean {
+	try {
+		const content = readFileSync(flakePath, "utf8");
+		return /\bformatter\b/.test(content);
+	} catch {
+		return false;
+	}
+}
+
+async function warmFormatters(
+	pi: ExtensionAPI,
+	cwd: string,
+	signal?: AbortSignal,
+): Promise<void> {
+	formatterCache.paths.clear();
+	formatterCache.prettierPath = undefined;
+	formatterCache.nixFormatter = undefined;
+
+	const commands = getConfiguredFormatterCommands();
+	await Promise.all(
+		commands.map(async (command) => {
+			const path = await commandPath(pi, cwd, command, signal);
+			if (path) formatterCache.paths.set(command, path);
+		}),
+	);
+
+	const prettier = findLocalPrettierFromRoot(cwd);
+	if (prettier) formatterCache.prettierPath = prettier;
+
+	const flakeNix = join(cwd, "flake.nix");
+	if (existsSync(flakeNix) && flakeHasFormatter(flakeNix)) {
+		for (const cmd of ["nixfmt", "alejandra", "nixpkgs-fmt"]) {
+			const path = await commandPath(pi, cwd, cmd, signal);
+			if (path) {
+				formatterCache.nixFormatter = { command: cmd, path };
+				break;
+			}
+		}
+	} else {
+		formatterCache.nixFormatter = null;
+	}
+}
+
 function isUsableFile(path: string): boolean {
 	try {
 		return existsSync(path) && statSync(path).isFile();
@@ -435,12 +561,166 @@ async function findDotnetFormatTarget(
 	return undefined;
 }
 
+async function resolveFormatter(
+	pi: ExtensionAPI,
+	file: string,
+	cwd: string,
+	signal?: AbortSignal,
+): Promise<
+	{ command: string; args: string[]; commandName: string } | undefined
+> {
+	if (extname(file).toLowerCase() === ".cs") {
+		const target = await findDotnetFormatTarget(pi, file, signal);
+		if (!target) return undefined;
+		return {
+			command: "dotnet",
+			args: ["format", target, "--include", file],
+			commandName: "dotnet",
+		};
+	}
+
+	const formatter = getFormatter(file);
+	if (!formatter) return undefined;
+	let [command, ...args] = formatter;
+	if (command === "prettier")
+		command =
+			formatterCache.prettierPath ??
+			findLocalPrettier(file, cwd) ??
+			command;
+	if (command === "alejandra") {
+		if (formatterCache.nixFormatter) {
+			command = formatterCache.nixFormatter.path;
+			args = [];
+		} else if (formatterCache.nixFormatter === undefined) {
+			const flakeNix = findFlakeNix(file, cwd);
+			if (flakeNix && flakeHasFormatter(flakeNix)) {
+				command = "nix";
+				args = ["fmt", "--"];
+			}
+		}
+	}
+	return {
+		command,
+		args: [...args, file],
+		commandName: formatCommandName(command),
+	};
+}
+
+async function formatFile(
+	pi: ExtensionAPI,
+	file: string,
+	cwd: string,
+	signal?: AbortSignal,
+): Promise<FormatResult | undefined> {
+	const resolvedFile = resolve(cwd, file);
+	if (!isUsableFile(resolvedFile)) return undefined;
+
+	const formatterInfo = await resolveFormatter(pi, resolvedFile, cwd, signal);
+	if (!formatterInfo) return undefined;
+
+	const { command, args, commandName } = formatterInfo;
+
+	const isCachedPath = command.startsWith("/");
+	if (!isCachedPath) {
+		const available = await pi.exec(
+			"bash",
+			["-lc", `command -v "$1"`, "--", command],
+			{ cwd, signal, timeout: 2000 },
+		);
+		if (available.code !== 0) {
+			return {
+				commandName,
+				changed: false,
+				error: "formatter not available",
+			};
+		}
+	}
+
+	const before = readFileSync(resolvedFile, "utf8");
+	const result = await pi.exec(command, args, {
+		cwd,
+		signal,
+		timeout: FORMAT_TIMEOUT_MS,
+	});
+	if (result.code !== 0) {
+		const output = (
+			result.stderr ||
+			result.stdout ||
+			"formatter failed"
+		).trim();
+		return { commandName, changed: false, error: output };
+	}
+
+	const after = readFileSync(resolvedFile, "utf8");
+	const changed = before !== after;
+	return { commandName, changed };
+}
+
+async function getModifiedFiles(
+	pi: ExtensionAPI,
+	cwd: string,
+	signal?: AbortSignal,
+): Promise<string[]> {
+	const gitResult = await pi.exec("git", ["status", "--porcelain"], {
+		cwd,
+		signal,
+		timeout: 5000,
+	});
+	if (gitResult.code === 0) {
+		const files: string[] = [];
+		for (const line of gitResult.stdout.split("\n")) {
+			if (!line) continue;
+			const status = line.slice(0, 2);
+			const path = line.slice(3).trim();
+			if (!path) continue;
+			if (status === "??") continue;
+			if (status.includes("D")) continue;
+			if (status.includes("M") || status.includes("A")) {
+				files.push(resolve(cwd, path));
+			}
+		}
+		return files;
+	}
+
+	const jjResult = await pi.exec("jj", ["status"], {
+		cwd,
+		signal,
+		timeout: 5000,
+	});
+	if (jjResult.code === 0) {
+		const files: string[] = [];
+		let inChanges = false;
+		for (const line of jjResult.stdout.split("\n")) {
+			if (line.startsWith("Working copy changes:")) {
+				inChanges = true;
+				continue;
+			}
+			if (!inChanges) continue;
+			if (line.startsWith("Working copy ")) break;
+			if (!line.trim()) continue;
+			const match = line.match(/^([A-Z])\s+(.+)$/);
+			if (!match) continue;
+			const [, status, path] = match;
+			if (status === "D") continue;
+			files.push(resolve(cwd, path.trim()));
+		}
+		return files;
+	}
+
+	return [];
+}
+
 export default function (pi: ExtensionAPI) {
 	pi.registerCommand("formatters", {
 		description: "Show detected project formatters and availability",
 		handler: async (_args, ctx) => {
-			const detected = new Set(
-				await findProjectFormatterCommands(pi, ctx.cwd, ctx.signal),
+			const detected = await findProjectFormatterCommands(
+				pi,
+				ctx.cwd,
+				ctx.signal,
+			);
+			const detectedMap = new Map(
+				detected.map((d) => [d.command, d.reason]),
 			);
 			const commands = getConfiguredFormatterCommands();
 			const entries = await Promise.all(
@@ -459,8 +739,39 @@ export default function (pi: ExtensionAPI) {
 						lines.push(
 							`  version: ${await commandVersion(pi, ctx.cwd, executablePath, ctx.signal)}`,
 						);
+
+					if (command === "prettier" && formatterCache.prettierPath) {
+						lines.push(
+							`  effective: ${formatterCache.prettierPath} (local)`,
+						);
+					}
+					if (command === "nix") {
+						if (formatterCache.nixFormatter) {
+							lines.push(
+								`  effective: ${formatterCache.nixFormatter.command} (${formatterCache.nixFormatter.path}) via flake formatter`,
+							);
+						} else if (formatterCache.nixFormatter === null) {
+							lines.push(
+								`  effective: global alejandra (no flake formatter)`,
+							);
+						}
+					}
+					if (
+						command === "alejandra" &&
+						formatterCache.nixFormatter
+					) {
+						lines.push(
+							`  effective: overridden to ${formatterCache.nixFormatter.command} (${formatterCache.nixFormatter.path}) via flake formatter`,
+						);
+					}
+
+					const reason = detectedMap.get(command);
+					if (reason) {
+						lines.push(`  reason: ${reason}`);
+					}
+
 					return {
-						on: detected.has(command),
+						on: detectedMap.has(command),
 						text: lines.join("\n"),
 					};
 				}),
@@ -470,6 +781,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		warmFormatters(pi, ctx.cwd, ctx.signal).catch(() => {});
 		refreshFormatterStatus(pi, ctx).catch((error) => {
 			if (isStaleContextError(error)) return;
 			if (!setFormatterStatus(ctx, "error", "error")) return;
@@ -499,62 +811,45 @@ export default function (pi: ExtensionAPI) {
 		if (!isUsableFile(file)) return;
 		const displayPath = formatDisplayPath(cwd, file);
 
-		let command: string;
-		let args: string[];
+		const formatResult = await formatFile(pi, file, cwd, ctx.signal);
+		if (!formatResult) return;
 
-		if (extname(file).toLowerCase() === ".cs") {
-			const target = await findDotnetFormatTarget(pi, file, ctx.signal);
-			if (!target) return;
-			command = "dotnet";
-			args = ["format", target, "--include", file];
-		} else {
-			const formatter = getFormatter(file);
-			if (!formatter) return;
-			[command, ...args] = formatter;
-			if (command === "prettier")
-				command = findLocalPrettier(file, cwd) ?? command;
-			args.push(file);
-		}
-
-		const available = await pi.exec(
-			"bash",
-			["-lc", `command -v "$1"`, "--", command],
-			{
-				cwd,
-				signal: ctx.signal,
-				timeout: 2000,
-			},
-		);
-		if (available.code !== 0) return;
-
-		const commandName = formatCommandName(command);
-		setFormatterStatus(ctx, "dim", ` ${commandName}`);
-		const result = await pi.exec(command, args, {
-			cwd,
-			signal: ctx.signal,
-			timeout: FORMAT_TIMEOUT_MS,
-		});
-
-		if (result.code !== 0) {
-			const output = (
-				result.stderr ||
-				result.stdout ||
-				"formatter failed"
-			).trim();
+		if (formatResult.error) {
 			notifyFormatterWarning(
 				ctx,
-				`Formatter failed using ${commandName}: ${output}`,
+				`Formatter failed using ${formatResult.commandName}: ${formatResult.error}`,
 			);
 			await refreshFormatterStatus(pi, ctx);
 			return;
 		}
 
+		if (formatResult.changed) {
+			lastFormatMtime.set(file, statSync(file).mtimeMs);
+		}
+
+		setFormatterStatus(ctx, "dim", ` ${formatResult.commandName}`);
 		await refreshFormatterStatus(pi, ctx);
 
-		if (event.toolName !== "edit") return;
+		let content: any = event.content;
+		if (formatResult.changed) {
+			const notice = `Note: This file was autoformatted with ${formatResult.commandName} after the ${event.toolName}.`;
+			if (typeof content === "string") {
+				content = `${content}\n\n${notice}`;
+			} else if (Array.isArray(content)) {
+				content = [...content, { type: "text" as const, text: notice }];
+			}
+		}
+
+		if (event.toolName !== "edit") {
+			if (formatResult.changed) return { content };
+			return;
+		}
 
 		const details = event.details as ToolResultDetails | undefined;
-		if (typeof details?.originalContent !== "string") return;
+		if (typeof details?.originalContent !== "string") {
+			if (formatResult.changed) return { content };
+			return;
+		}
 
 		const diff = await computeUnifiedDiff(
 			pi,
@@ -563,9 +858,49 @@ export default function (pi: ExtensionAPI) {
 			displayPath,
 			ctx.signal,
 		);
-		if (diff === undefined)
-			return { details: { ...details, formatter: commandName } };
+		const newDetails =
+			diff === undefined
+				? { ...details, formatter: formatResult.commandName }
+				: { ...details, diff, formatter: formatResult.commandName };
 
-		return { details: { ...details, diff, formatter: commandName } };
+		if (formatResult.changed) return { content, details: newDetails };
+		return { details: newDetails };
+	});
+
+	pi.on("turn_end", async (event, ctx) => {
+		const cwd = resolve(ctx.cwd);
+		const modifiedFiles = await getModifiedFiles(pi, cwd, ctx.signal);
+		const formatted: { path: string; formatter: string }[] = [];
+
+		for (const file of modifiedFiles) {
+			if (!isUsableFile(file)) continue;
+			if (!getFormatter(file) && extname(file).toLowerCase() !== ".cs")
+				continue;
+
+			const mtime = statSync(file).mtimeMs;
+			const lastFormatted = lastFormatMtime.get(file);
+			if (lastFormatted !== undefined && mtime <= lastFormatted) continue;
+
+			const result = await formatFile(pi, file, cwd, ctx.signal);
+			if (!result || result.error) continue;
+
+			if (result.changed) {
+				lastFormatMtime.set(file, statSync(file).mtimeMs);
+				formatted.push({
+					path: relative(cwd, file),
+					formatter: result.commandName,
+				});
+			}
+		}
+
+		if (formatted.length > 0) {
+			const summary = formatted
+				.map((f) => `${f.path} (${f.formatter})`)
+				.join(", ");
+			notifyFormatterInfo(
+				ctx,
+				`Autoformatted ${formatted.length} file${formatted.length === 1 ? "" : "s"}: ${summary}`,
+			);
+		}
 	});
 }
