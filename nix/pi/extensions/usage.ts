@@ -22,6 +22,8 @@ export type UsageWindow = {
 	percentRemaining?: number;
 	resetAt?: string;
 	unlimited?: boolean;
+	/** Dollar cost, e.g. AI credits ÷ 100 */
+	cost?: number;
 };
 
 export type ProviderUsage = {
@@ -739,6 +741,89 @@ async function copilotTokens(ctx: ExtensionContext): Promise<CopilotToken[]> {
 		);
 }
 
+function copilotAiCreditsWindow(data: unknown): UsageWindow | undefined {
+	const snapshot = nested(data, ["quota_snapshots", "ai_credits"]);
+	const obj = isObject(snapshot)
+		? snapshot
+		: isObject(data)
+			? data.ai_credits
+			: undefined;
+	if (!isObject(obj)) return undefined;
+
+	const used =
+		typeof obj.used === "number"
+			? obj.used
+			: typeof obj.quota_used === "number"
+				? obj.quota_used
+				: undefined;
+	const remaining =
+		typeof obj.remaining === "number"
+			? obj.remaining
+			: typeof obj.quota_remaining === "number"
+				? obj.quota_remaining
+				: undefined;
+	const total =
+		typeof obj.entitlement === "number"
+			? obj.entitlement
+			: typeof obj.limit === "number"
+				? obj.limit
+				: typeof obj.total === "number"
+					? obj.total
+					: undefined;
+	const resetAt =
+		typeof obj.reset_at === "string"
+			? obj.reset_at
+			: typeof obj.quota_reset_at === "string"
+				? obj.quota_reset_at
+				: typeof obj.quota_reset_date_utc === "string"
+					? obj.quota_reset_date_utc
+					: undefined;
+	const unlimited =
+		typeof obj.unlimited === "boolean" ? obj.unlimited : undefined;
+	const explicitPercent =
+		typeof obj.percent_remaining === "number"
+			? obj.percent_remaining
+			: typeof obj.quota_percent_remaining === "number"
+				? obj.quota_percent_remaining
+				: undefined;
+
+	const resolvedTotal =
+		total ??
+		(used !== undefined && remaining !== undefined
+			? used + remaining
+			: undefined);
+	const resolvedUsed =
+		used ??
+		(resolvedTotal !== undefined && remaining !== undefined
+			? Math.max(0, resolvedTotal - remaining)
+			: undefined);
+	const percentRemaining =
+		explicitPercent ??
+		(resolvedTotal && resolvedUsed !== undefined
+			? ((resolvedTotal - resolvedUsed) / resolvedTotal) * 100
+			: undefined);
+
+	if (
+		!unlimited &&
+		resolvedTotal === undefined &&
+		resolvedUsed === undefined &&
+		remaining === undefined
+	) {
+		return undefined;
+	}
+
+	return {
+		label: "ai credits",
+		used: resolvedUsed,
+		total: resolvedTotal,
+		remaining,
+		percentRemaining: clampPercent(percentRemaining),
+		resetAt,
+		unlimited,
+		cost: resolvedUsed !== undefined ? resolvedUsed / 100 : undefined,
+	};
+}
+
 export async function copilotUsage(
 	ctx: ExtensionContext,
 ): Promise<ProviderUsage> {
@@ -757,7 +842,7 @@ export async function copilotUsage(
 		response = await fetchJson(COPILOT_USER_URL, {
 			Authorization: `${token.scheme === "token" ? "token" : "Bearer"} ${token.token}`,
 			Accept: "application/vnd.github+json",
-			"X-GitHub-Api-Version": "2025-04-01",
+			"X-GitHub-Api-Version": "2026-03-10",
 			"User-Agent": "GitHubCopilotChat/0.47.1",
 			"X-Vscode-User-Agent-Library-Version": "electron-fetch",
 		});
@@ -854,20 +939,31 @@ export async function copilotUsage(
 		};
 	}
 
+	const windows: UsageWindow[] = [];
+	const aiCreditsWindow = copilotAiCreditsWindow(response.data);
+	if (aiCreditsWindow) {
+		windows.push(aiCreditsWindow);
+	}
+	if (
+		unlimited ||
+		resolvedTotal !== undefined ||
+		resolvedUsed !== undefined ||
+		remaining !== undefined
+	) {
+		windows.push({
+			label: "premium requests",
+			used: resolvedUsed,
+			total: resolvedTotal,
+			remaining,
+			percentRemaining: clampPercent(percentRemaining),
+			resetAt,
+			unlimited,
+		});
+	}
 	return {
 		provider: "GitHub Copilot",
 		status: "ok",
-		windows: [
-			{
-				label: "premium requests",
-				used: resolvedUsed,
-				total: resolvedTotal,
-				remaining,
-				percentRemaining: clampPercent(percentRemaining),
-				resetAt,
-				unlimited,
-			},
-		],
+		windows,
 	};
 }
 
@@ -883,6 +979,9 @@ function windowParts(window: UsageWindow): string[] {
 			? `${window.percentRemaining.toFixed(0)}% remaining`
 			: undefined,
 		window.unlimited ? "unlimited" : undefined,
+		window.cost !== undefined
+			? `${formatCurrency(window.cost)} cost`
+			: undefined,
 	].filter((part): part is string => Boolean(part));
 }
 
@@ -1003,9 +1102,7 @@ function renderUsageContent(
 			lines.push(
 				...localUsage
 					.split("\n")
-					.map((line) =>
-						truncateToWidth(`  ${line}`, contentWidth),
-					),
+					.map((line) => truncateToWidth(`  ${line}`, contentWidth)),
 			);
 			return lines;
 		},
@@ -1229,16 +1326,11 @@ export default function usageExtension(pi: ExtensionAPI) {
 						},
 						invalidate() {},
 						handleInput(data: string) {
-							if (
-								kb.matches(data, "tui.select.cancel")
-							) {
+							if (kb.matches(data, "tui.select.cancel")) {
 								done();
 								return;
 							}
-							if (
-								matchesKey(data, Key.enter) ||
-								data === "q"
-							) {
+							if (matchesKey(data, Key.enter) || data === "q") {
 								done();
 								return;
 							}
