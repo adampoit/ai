@@ -4,7 +4,7 @@
   outputs = {self, ...}: {
     homeManagerModules = {
       opencode = import ./nix/opencode.nix;
-      pi = import ./nix/pi.nix;
+      pi-coding-agent = import ./nix/pi-coding-agent.nix;
       default = self.homeManagerModules.opencode;
     };
 

@@ -1,13 +1,13 @@
 # Repository Guide
 
-This repository contains reusable OpenCode and Pi assets:
+This repository contains reusable OpenCode and Pi Coding Agent assets:
 
 - `global-instructions.md` for shared rules
 - `agents/` for agent profiles
 - `prompts/` for command prompts
 - `skills/` for skill docs and helper scripts
 - `nix/opencode.nix` for the Home Manager OpenCode configuration module
-- `nix/pi.nix` for the Home Manager Pi configuration module
+- `nix/pi-coding-agent.nix` for Pi Coding Agent Home Manager customizations
 
 ## Working Principles
 
@@ -22,7 +22,7 @@ For Nix module edits, validate flake/module syntax:
 
 - `nix flake show --no-write-lock-file`
 - `nix-instantiate --parse ./nix/opencode.nix`
-- `nix-instantiate --parse ./nix/pi.nix`
+- `nix-instantiate --parse ./nix/pi-coding-agent.nix`
 
 For Pi TypeScript extension edits, run:
 

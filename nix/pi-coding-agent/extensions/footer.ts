@@ -107,6 +107,23 @@ function quotaVisual(
 	return `${quotaLabel(window.label)} ${quotaBar(window.percentRemaining, 6)} ${quotaPercent(window)}${eta ? ` ↻ ${eta}` : ""}`;
 }
 
+function sessionCostVariants(ctx: ExtensionContext): PowerlineSegment[] {
+	let totalCost = 0;
+	for (const entry of ctx.sessionManager.getEntries()) {
+		if (entry.type === "message" && entry.message.role === "assistant") {
+			totalCost += entry.message.usage.cost.total;
+		}
+	}
+	if (!totalCost) return [];
+	return [
+		{
+			text: `$${totalCost.toFixed(3)}`,
+			fg: gruvbox.aqua,
+			bg: gruvbox.bg,
+		},
+	];
+}
+
 function quotaVariants(
 	result: ProviderUsage | undefined,
 	loading: boolean,
@@ -295,7 +312,17 @@ export default function (pi: ExtensionAPI) {
 							: ctx.model.id
 						: "no-model";
 					const modelWithReasoning = `${model} • ${thinkingLevel}`;
-					const quotaOptions = quotaVariants(quota, quotaLoading);
+					const currentQuotaProvider = ctx.model
+						? quotaProvider(ctx.model.provider)
+						: undefined;
+					const copilotCostOptions =
+						currentQuotaProvider === "copilot"
+							? sessionCostVariants(ctx)
+							: [];
+					const quotaOptions =
+						copilotCostOptions.length > 0
+							? copilotCostOptions
+							: quotaVariants(quota, quotaLoading);
 
 					const importantRight = renderPowerlineRight([
 						modelSegment(modelWithReasoning),

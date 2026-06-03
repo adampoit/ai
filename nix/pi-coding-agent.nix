@@ -4,29 +4,58 @@
   pkgs,
   ...
 }: let
-  cfg = config.programs.pi;
-
-  settings =
-    {
-      theme = "gruvbox";
-      hideThinkingBlock = false;
-      enableSkillCommands = true;
-    }
-    // lib.optionalAttrs (cfg.enabledModels != []) {
-      enabledModels = cfg.enabledModels;
-    };
+  piCfg = config.programs.pi-coding-agent;
+  piAgentSource = ./pi-coding-agent;
 
   piAgentDir = pkgs.runCommand "pi-agent-dir" {} ''
     mkdir -p $out
-    cp -R ${./pi/components} $out/components
-    cp -R ${./pi/extensions} $out/extensions
+    cp -R ${piAgentSource}/components $out/components
+    cp -R ${piAgentSource}/extensions $out/extensions
   '';
 
-  piSkills = pkgs.runCommand "pi-skills" {} ''
-    mkdir -p $out
-    cp -R ${../skills}/. $out/
-    ln -s ${pkgs.playwright-cli}/share/opencode/skills/playwright-cli $out/playwright-cli
-  '';
+  settings = {
+    theme = lib.mkDefault "gruvbox";
+    hideThinkingBlock = lib.mkDefault false;
+    enableSkillCommands = lib.mkDefault true;
+  };
+
+  piExtraPackages = [
+    pkgs.alejandra
+    pkgs.clang-tools
+    pkgs.delta
+    (pkgs.lib.lowPrio pkgs.dotnet-sdk)
+    pkgs.ktlint
+    pkgs.lua-language-server
+    pkgs.nixd
+    pkgs.prettier
+    pkgs.roslyn-ls
+    pkgs.ruff
+    pkgs.shfmt
+    pkgs.sqlfluff
+    pkgs.stylua
+    pkgs.swiftlint
+    pkgs.terraform
+    pkgs.vtsls
+  ];
+
+  localSkillsDir = ../skills;
+  localSkillEntries = builtins.readDir localSkillsDir;
+  localSkillNames =
+    builtins.filter (name: localSkillEntries.${name} == "directory")
+    (builtins.attrNames localSkillEntries);
+  piSkills = pkgs.linkFarm "pi-skills" (
+    map (name: {
+      inherit name;
+      path = localSkillsDir + "/${name}";
+    })
+    localSkillNames
+    ++ [
+      {
+        name = "playwright-cli";
+        path = pkgs.playwright-cli + "/share/opencode/skills/playwright-cli";
+      }
+    ]
+  );
 
   gruvboxTheme = {
     "$schema" = "https://raw.githubusercontent.com/badlogic/pi-mono/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json";
@@ -116,49 +145,23 @@
     };
   };
 in {
-  options.programs.pi.enabledModels = lib.mkOption {
-    type = lib.types.listOf lib.types.str;
-    default = [];
-    example = [
-      "github-copilot/claude-opus-4.6"
-      "openai-codex/gpt-5.5"
-    ];
-    description = ''
-      Pi model IDs to enable in ~/.pi/agent/settings.json.
-      Optional; if empty, no prioritized models are set.
-    '';
-  };
-
   config = {
-    home.sessionVariables.PI_SKIP_VERSION_CHECK = "1";
+    programs.pi-coding-agent = {
+      enable = true;
+      context = ../global-instructions.md;
+      extraPackages = piExtraPackages;
+      inherit settings;
+    };
 
-    home.packages = [
-      pkgs.alejandra
-      pkgs.clang-tools
-      pkgs.delta
-      (pkgs.lib.lowPrio pkgs.dotnet-sdk)
-      pkgs.ktlint
-      pkgs.lua-language-server
-      pkgs.nixd
-      pkgs.prettier
-      pkgs.roslyn-ls
-      pkgs.ruff
-      pkgs.shfmt
-      pkgs.sqlfluff
-      pkgs.stylua
-      pkgs.swiftlint
-      pkgs.terraform
-      pkgs.vtsls
-    ];
+    home.sessionVariables.PI_SKIP_VERSION_CHECK = lib.mkDefault "1";
+    home.packages = lib.mkIf (piCfg.package == null) piExtraPackages;
 
     home.file = {
-      ".pi/agent/settings.json".text = builtins.toJSON settings;
-      ".pi/agent/themes/gruvbox.json".text = builtins.toJSON gruvboxTheme;
-      ".pi/agent/AGENTS.md".source = ../global-instructions.md;
-      ".pi/agent/components".source = piAgentDir + "/components";
-      ".pi/agent/extensions".source = piAgentDir + "/extensions";
-      ".pi/agent/skills".source = piSkills;
-      ".pi/agent/prompts".source = ../prompts;
+      "${piCfg.configDir}/themes/gruvbox.json".text = builtins.toJSON gruvboxTheme;
+      "${piCfg.configDir}/components".source = piAgentDir + "/components";
+      "${piCfg.configDir}/extensions".source = piAgentDir + "/extensions";
+      "${piCfg.configDir}/skills".source = piSkills;
+      "${piCfg.configDir}/prompts".source = ../prompts;
     };
   };
 }

@@ -17,7 +17,6 @@ import {
 import {
 	countLines,
 	displayPath,
-	firstTextLine,
 	isExpanded,
 	pendingText,
 	safeString,
@@ -28,6 +27,16 @@ import {
 } from "./shared.ts";
 
 const COLLAPSED_BASH_LINES = 14;
+
+type BashSkinState = SkinState<BashToolDetails | undefined> & {
+	elapsedTimer?: ReturnType<typeof setInterval>;
+};
+
+function stopElapsedTimer(state: BashSkinState): void {
+	if (state.elapsedTimer === undefined) return;
+	clearInterval(state.elapsedTimer);
+	state.elapsedTimer = undefined;
+}
 
 function parseExitCode(output: string): number | undefined {
 	const match =
@@ -135,13 +144,39 @@ export default function registerBashTool(pi: ExtensionAPI) {
 		...originalBash,
 		renderShell: "self",
 		renderCall(args, theme, context) {
-			const state = context.state as SkinState<
-				BashToolDetails | undefined
-			>;
+			const state = context.state as BashSkinState;
 			if (context.executionStarted && state.startedAt === undefined) {
 				state.startedAt = Date.now();
 				state.endedAt = undefined;
 			}
+			if (
+				context.executionStarted &&
+				!context.isPartial &&
+				state.startedAt !== undefined
+			) {
+				state.endedAt ??= Date.now();
+			}
+
+			const shouldTick =
+				context.executionStarted &&
+				context.isPartial &&
+				!context.isError;
+			if (shouldTick && state.elapsedTimer === undefined) {
+				state.elapsedTimer = setInterval(() => {
+					if (state.endedAt !== undefined) {
+						stopElapsedTimer(state);
+						return;
+					}
+					try {
+						context.invalidate();
+					} catch {
+						stopElapsedTimer(state);
+					}
+				}, 1000);
+			} else if (!shouldTick) {
+				stopElapsedTimer(state);
+			}
+
 			const shell = state.shell ?? new ToolShell({ title: "bash" });
 			state.shell = shell;
 			shell.setOptions(
@@ -150,14 +185,14 @@ export default function registerBashTool(pi: ExtensionAPI) {
 			return shell;
 		},
 		renderResult(result, options, theme, context) {
-			const state = context.state as SkinState<
-				BashToolDetails | undefined
-			>;
+			const state = context.state as BashSkinState;
 			if (
 				(!options.isPartial || context.isError) &&
 				state.startedAt !== undefined
-			)
+			) {
 				state.endedAt ??= Date.now();
+				stopElapsedTimer(state);
+			}
 			state.info = { result, options, isError: context.isError };
 			state.shell?.setOptions(
 				buildBashShell(context.args, state.info, theme, context, state),

@@ -9,5 +9,8 @@
 		"allowImportingTsExtensions": true,
 		"types": ["node"]
 	},
-	"include": ["nix/pi/components/**/*.ts", "nix/pi/extensions/**/*.ts"]
+	"include": [
+		"nix/pi-coding-agent/components/**/*.ts",
+		"nix/pi-coding-agent/extensions/**/*.ts"
+	]
 }

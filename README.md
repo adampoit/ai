@@ -1,7 +1,7 @@
 # AI Agent Assets
 
 Reusable assets for AI agents: shared instructions, agent profiles, prompts, and tool-integrated skills.
-This repo also ships Home Manager modules for OpenCode and Pi on Nix-based setups.
+This repo also ships Home Manager customizations for OpenCode and Pi Coding Agent on Nix-based setups.
 
 ## What's Included
 
@@ -10,7 +10,7 @@ This repo also ships Home Manager modules for OpenCode and Pi on Nix-based setup
 - `prompts/`: reusable command prompt templates
 - `skills/`: local skills with docs and helper scripts
 - `nix/opencode.nix`: OpenCode Home Manager module export
-- `nix/pi.nix`: Pi Home Manager module export
+- `nix/pi-coding-agent.nix`: Pi Coding Agent Home Manager customizations
 
 ## OpenCode Home Manager Module
 
@@ -32,23 +32,25 @@ home-manager.sharedModules = [
 ];
 ```
 
-## Pi Home Manager Module
+## Pi Coding Agent Home Manager Customizations
 
-If you use Pi with Home Manager, this repository exports `homeManagerModules.pi`.
-It installs shared prompts, skills, extensions, a gruvbox theme, and formatter/LSP helper packages.
+If you use Pi Coding Agent with Home Manager, this repository exports
+`homeManagerModules.pi-coding-agent`. It configures Home Manager's upstream
+`programs.pi-coding-agent` module, installs a pinned Pi package, shared prompts,
+skills, extensions, a gruvbox theme, and formatter/LSP helper packages.
 
 Enable the module in Home Manager:
 
 ```nix
 home-manager.sharedModules = [
-  inputs.ai.homeManagerModules.pi
+  inputs.ai.homeManagerModules.pi-coding-agent
 ];
 ```
 
-Optionally customize the models written to `~/.pi/agent/settings.json`:
+The Pi package defaults to pinned version `0.75.4`, which avoids the current nixpkgs Darwin build failure in `0.78.0`. Customize models with the upstream module setting:
 
 ```nix
-programs.pi.enabledModels = [
+programs.pi-coding-agent.settings.enabledModels = [
   "github-copilot/claude-opus-4.6"
   "openai-codex/gpt-5.5"
 ];
@@ -57,10 +59,9 @@ programs.pi.enabledModels = [
 ## Requirements
 
 - `opencode` on `PATH` (only needed when using the OpenCode module/CLI)
-- Pi on `PATH` (only needed when using the Pi module/CLI)
+- Any model-provider credentials needed by Pi/OpenCode
 - .NET SDK (required by C#-based skills)
 - Any tool-specific credentials needed by individual skills (for example, `SLACK_API_TOKEN` for Slack)
-- Any model-provider credentials needed by Pi/OpenCode
 
 ## Validation
 
@@ -69,7 +70,7 @@ For module-related edits, validate syntax with:
 ```bash
 nix flake show --no-write-lock-file
 nix-instantiate --parse ./nix/opencode.nix
-nix-instantiate --parse ./nix/pi.nix
+nix-instantiate --parse ./nix/pi-coding-agent.nix
 ```
 
 For Pi TypeScript extension edits, run:

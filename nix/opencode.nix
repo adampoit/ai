@@ -59,7 +59,7 @@
         };
 
         swiftlint = {
-          command = ["swiftlint" "format" "--path" "$FILE"];
+          command = ["swiftlint" "lint" "--fix" "--format" "$FILE"];
           extensions = [".swift"];
         };
       };

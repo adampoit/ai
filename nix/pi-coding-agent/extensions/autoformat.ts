@@ -377,7 +377,7 @@ const formatterByExtension: Record<string, string[]> = {
 	".sh": ["shfmt", "-w", "-i", "0"],
 	".bash": ["shfmt", "-w", "-i", "0"],
 	".zsh": ["shfmt", "-w", "-i", "0"],
-	".swift": ["swiftlint", "--fix", "--path"],
+	".swift": ["swiftlint", "lint", "--fix"],
 	".tf": ["terraform", "fmt", "-no-color"],
 	".tfvars": ["terraform", "fmt", "-no-color"],
 	".sql": ["sqlfluff", "fix"],

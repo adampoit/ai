@@ -1,4 +1,3 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
@@ -43,6 +42,7 @@ export function quotaLabel(label: string): string {
 	if (normalized === "secondary" || normalized.includes("week")) return "wk";
 	if (normalized.includes("month")) return "mo";
 	if (normalized.includes("premium")) return "req";
+	if (normalized.includes("credit")) return "cr";
 	return label;
 }
 
@@ -221,12 +221,11 @@ function localSessionUsage(ctx: ExtensionCommandContext): string {
 	for (const entry of ctx.sessionManager.getEntries()) {
 		if (entry.type !== "message" || entry.message.role !== "assistant")
 			continue;
-		const message = entry.message as AssistantMessage;
-		input += message.usage.input;
-		output += message.usage.output;
-		cacheRead += message.usage.cacheRead;
-		cacheWrite += message.usage.cacheWrite;
-		cost += message.usage.cost.total;
+		input += entry.message.usage.input;
+		output += entry.message.usage.output;
+		cacheRead += entry.message.usage.cacheRead;
+		cacheWrite += entry.message.usage.cacheWrite;
+		cost += entry.message.usage.cost.total;
 	}
 
 	const total = input + output + cacheRead + cacheWrite;
@@ -234,7 +233,7 @@ function localSessionUsage(ctx: ExtensionCommandContext): string {
 		return "No local token usage recorded in this Pi session yet.";
 
 	return [
-		`${formatCount(total)} tokens, ${formatCurrency(cost)} estimated cost`,
+		`${formatCount(total)} tokens, ${formatCurrency(cost)} recorded cost`,
 		`input ${formatCount(input)} · output ${formatCount(output)} · cache read ${formatCount(cacheRead)} · cache write ${formatCount(cacheWrite)}`,
 	].join("\n");
 }
@@ -742,12 +741,16 @@ async function copilotTokens(ctx: ExtensionContext): Promise<CopilotToken[]> {
 }
 
 function copilotAiCreditsWindow(data: unknown): UsageWindow | undefined {
-	const snapshot = nested(data, ["quota_snapshots", "ai_credits"]);
-	const obj = isObject(snapshot)
-		? snapshot
-		: isObject(data)
-			? data.ai_credits
-			: undefined;
+	// GitHub's new billing model (June 2026) keeps AI-credit data in
+	// premium_models / premium_interactions and sets token_based_billing=true.
+	let obj: JsonObject | undefined;
+	for (const key of ["premium_models", "premium_interactions"] as const) {
+		const candidate = nested(data, ["quota_snapshots", key]);
+		if (isObject(candidate) && candidate.token_based_billing === true) {
+			obj = candidate;
+			break;
+		}
+	}
 	if (!isObject(obj)) return undefined;
 
 	const used =
@@ -861,6 +864,7 @@ export async function copilotUsage(
 		["monthly_quota", "limit"],
 		["monthly_premium_requests", "limit"],
 		["premium_requests", "limit"],
+		["quota_snapshots", "premium_models", "entitlement"],
 		["quota_snapshots", "premium_interactions", "entitlement"],
 		["limit"],
 		["quota_limit"],
@@ -879,6 +883,7 @@ export async function copilotUsage(
 		["monthly_quota", "remaining"],
 		["monthly_premium_requests", "remaining"],
 		["premium_requests", "remaining"],
+		["quota_snapshots", "premium_models", "remaining"],
 		["quota_snapshots", "premium_interactions", "remaining"],
 		["remaining"],
 		["quota_remaining"],
@@ -898,6 +903,7 @@ export async function copilotUsage(
 		["monthly_quota", "percent_remaining"],
 		["monthly_premium_requests", "percent_remaining"],
 		["premium_requests", "percent_remaining"],
+		["quota_snapshots", "premium_models", "percent_remaining"],
 		["quota_snapshots", "premium_interactions", "percent_remaining"],
 		["percent_remaining"],
 	]);
@@ -906,8 +912,14 @@ export async function copilotUsage(
 		["monthly_quota", "unlimited"],
 		["monthly_premium_requests", "unlimited"],
 		["premium_requests", "unlimited"],
+		["quota_snapshots", "premium_models", "unlimited"],
 		["quota_snapshots", "premium_interactions", "unlimited"],
 		["unlimited"],
+	]);
+	const tokenBasedBilling = firstBoolean(response.data, [
+		["quota_snapshots", "premium_models", "token_based_billing"],
+		["quota_snapshots", "premium_interactions", "token_based_billing"],
+		["token_based_billing"],
 	]);
 
 	const resolvedTotal =
@@ -942,16 +954,21 @@ export async function copilotUsage(
 	const windows: UsageWindow[] = [];
 	const aiCreditsWindow = copilotAiCreditsWindow(response.data);
 	if (aiCreditsWindow) {
+		// The snapshot-level object has no reset_at; fall back to the root
+		// quota_reset_date when the window itself is missing one.
+		if (!aiCreditsWindow.resetAt && resetAt) {
+			aiCreditsWindow.resetAt = resetAt;
+		}
 		windows.push(aiCreditsWindow);
-	}
-	if (
+	} else if (
 		unlimited ||
 		resolvedTotal !== undefined ||
 		resolvedUsed !== undefined ||
 		remaining !== undefined
 	) {
 		windows.push({
-			label: "premium requests",
+			label:
+				tokenBasedBilling === true ? "ai credits" : "premium requests",
 			used: resolvedUsed,
 			total: resolvedTotal,
 			remaining,
@@ -968,11 +985,17 @@ export async function copilotUsage(
 }
 
 function windowParts(window: UsageWindow): string[] {
+	// For unlimited business/enterprise plans GitHub reports entitlement:0,
+	// remaining:0 — rendering "0/0 used" is meaningless, so suppress it.
+	const zeroCapUnlimited =
+		window.unlimited && window.total === 0 && window.remaining === 0;
 	return [
-		window.used !== undefined && window.total !== undefined
+		window.used !== undefined &&
+		window.total !== undefined &&
+		!zeroCapUnlimited
 			? `${formatCount(window.used)}/${formatCount(window.total)} used`
 			: undefined,
-		window.remaining !== undefined
+		window.remaining !== undefined && !zeroCapUnlimited
 			? `${formatCount(window.remaining)} remaining`
 			: undefined,
 		window.percentRemaining !== undefined
@@ -1282,14 +1305,6 @@ export default function usageExtension(pi: ExtensionAPI) {
 											[
 												{
 													key: "esc",
-													label: "close",
-												},
-												{
-													key: "enter",
-													label: "close",
-												},
-												{
-													key: "q",
 													label: "close",
 												},
 											],

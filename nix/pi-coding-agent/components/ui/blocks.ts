@@ -836,18 +836,23 @@ export class TerminalPane
 			lines.push(`${prompt} ${this.options.command}`);
 		}
 
-		const maxLines = this.options.maxLines ?? this.outputLines.length;
-		lines.push(...this.outputLines.slice(0, maxLines));
+		const maxLines = Math.max(
+			0,
+			this.options.maxLines ?? this.outputLines.length,
+		);
 		if (this.outputLines.length > maxLines) {
 			lines.push(
 				styleText(
-					`… ${this.outputLines.length - maxLines} more output lines`,
+					`… ${this.outputLines.length - maxLines} previous output lines`,
 					{
 						fg: gruvbox.gray,
 						theme: this.options.theme,
 					},
 				),
 			);
+			if (maxLines > 0) lines.push(...this.outputLines.slice(-maxLines));
+		} else {
+			lines.push(...this.outputLines);
 		}
 
 		return lines.map((line) => fillAnsiLine(line, width, bg));
