@@ -1,2 +1,7 @@
 .DS_Store
+.direnv/
 node_modules/
+tests/extensions/lsp/fixtures/csharp-project/bin/
+tests/extensions/lsp/fixtures/csharp-project/obj/
+tests/extensions/lsp/fixtures/python-project/.ruff_cache/
+tests/extensions/lsp/fixtures/swift-project/.build/

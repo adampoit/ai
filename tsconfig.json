@@ -11,6 +11,8 @@
 	},
 	"include": [
 		"nix/pi-coding-agent/components/**/*.ts",
-		"nix/pi-coding-agent/extensions/**/*.ts"
-	]
+		"nix/pi-coding-agent/extensions/**/*.ts",
+		"tests/**/*.ts"
+	],
+	"exclude": ["tests/**/fixtures/**"]
 }

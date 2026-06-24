@@ -3,8 +3,8 @@ import type {
 	LsToolDetails,
 	LsToolInput,
 	Theme,
-} from "@mariozechner/pi-coding-agent";
-import { createLsToolDefinition } from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
+import { createLsToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
 	gruvbox,
 	StaticLines,

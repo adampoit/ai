@@ -1,27 +1,30 @@
-import type {
-	ExtensionAPI,
-	ExtensionCommandContext,
-} from "@mariozechner/pi-coding-agent";
-import { StringEnum } from "@mariozechner/pi-ai";
-import { truncateToWidth } from "@mariozechner/pi-tui";
-import {
-	BlockFrame,
-	CachedComponent,
-	expandTabs,
-	gruvbox,
-	KeyHintLine,
-	StaticLines,
-	ToolShell,
-	type BadgeSpec,
-	type ExpansionAwareComponent,
-	type InvocationLineOptions,
-	type ToolShellOptions,
-} from "../components/index.ts";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { readFile, access } from "node:fs/promises";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { gruvbox, ToolShell } from "../components/index.ts";
+import {
+	diagnosticsFromDetails,
+	formatDiagnostics,
+	severityCounts,
+} from "./lsp/diagnostics.ts";
+import {
+	getManager,
+	LspManager,
+	resolveSymbolPosition,
+} from "./lsp/manager.ts";
+import {
+	collapsedDiagnosticMessageLines,
+	expandedDiagnosticMessageLines,
+	LspResultPane,
+	lspToolRenderer,
+	severityBadges,
+	splitTextLines,
+} from "./lsp/rendering.ts";
+import type {
+	DiagnosticParams,
+	JsonToolResult,
+	SymbolPositionParams,
+} from "./lsp/types.ts";
 
 const diagnosticSchema = Type.Object({
 	files: Type.Optional(
@@ -57,80 +60,11 @@ const searchSchema = Type.Object({
 
 const emptySchema = Type.Object({});
 
-type DiagnosticParams = {
-	files?: string[];
-	scope?: "changed" | "all";
-};
-
-type SymbolPositionParams = {
-	file: string;
-	symbol?: string;
-	line?: number;
-	character?: number;
-};
-
-type Diagnostic = {
-	file: string;
-	line: number;
-	character: number;
-	severity: string;
-	source?: string;
-	message: string;
-};
-
-type ServerConfig = {
-	languages: string[];
-	command: string;
-	args: string[];
-};
-
-type RpcMessage = {
-	jsonrpc: "2.0";
-	id?: number;
-	method?: string;
-	params?: unknown;
-	result?: unknown;
-	error?: unknown;
-};
-
-const servers: ServerConfig[] = [
-	{ languages: ["nix"], command: "nixd", args: [] },
-	{ languages: ["lua"], command: "lua-language-server", args: [] },
-	{
-		languages: [
-			"typescript",
-			"javascript",
-			"typescriptreact",
-			"javascriptreact",
-		],
-		command: "vtsls",
-		args: ["--stdio"],
-	},
-	{ languages: ["python"], command: "ruff", args: ["server"] },
-	{
-		languages: ["csharp"],
-		command: "Microsoft.CodeAnalysis.LanguageServer",
-		args: ["--stdio"],
-	},
-];
-
-const languageByExtension = new Map<string, string>([
-	[".nix", "nix"],
-	[".lua", "lua"],
-	[".ts", "typescript"],
-	[".tsx", "typescriptreact"],
-	[".js", "javascript"],
-	[".jsx", "javascriptreact"],
-	[".mjs", "javascript"],
-	[".cjs", "javascript"],
-	[".py", "python"],
-	[".cs", "csharp"],
-]);
-
 export default function (pi: ExtensionAPI) {
 	let injectedForTurn = false;
 	let lastInjectedSignature = "";
 	let manager: LspManager | undefined;
+	let sessionGeneration = 0;
 
 	pi.registerMessageRenderer(
 		"lsp-diagnostics",
@@ -182,11 +116,19 @@ export default function (pi: ExtensionAPI) {
 	);
 
 	pi.on("session_start", async (_event, ctx) => {
-		const renderStatus = (status: string) =>
+		const generation = ++sessionGeneration;
+		let currentManager: LspManager;
+		const isCurrentSession = () =>
+			generation === sessionGeneration && manager === currentManager;
+		const renderStatus = (status: string) => {
+			if (!isCurrentSession()) return;
 			ctx.ui.setStatus("lsp", ctx.ui.theme.fg("dim", status));
-		manager = new LspManager(ctx.cwd, renderStatus);
+		};
+		currentManager = new LspManager(ctx.cwd, renderStatus, ctx.ui.notify);
+		manager = currentManager;
 		renderStatus("lsp: 󰔟 warming");
-		manager.prewarm().catch((error) => {
+		currentManager.prewarm().catch((error) => {
+			if (!isCurrentSession()) return;
 			renderStatus("lsp:  error");
 			ctx.ui.notify(
 				`LSP prewarm failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -196,9 +138,11 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
-		await manager?.stop();
-		ctx.ui.setStatus("lsp", "");
+		++sessionGeneration;
+		const currentManager = manager;
 		manager = undefined;
+		await currentManager?.stop();
+		ctx.ui.setStatus("lsp", "");
 	});
 
 	pi.on("agent_start", () => {
@@ -209,10 +153,11 @@ export default function (pi: ExtensionAPI) {
 		if (injectedForTurn) return;
 
 		const diagnostics = (
-			await getManager(ctx.cwd, manager).collectDiagnostics(
-				{ scope: "changed" },
-				ctx.signal,
-			)
+			await getManager(
+				ctx.cwd,
+				manager,
+				ctx.ui.notify,
+			).collectDiagnostics({ scope: "changed" }, ctx.signal)
 		).filter((d) => d.severity === "error" || d.severity === "warning");
 		if (diagnostics.length === 0) return;
 
@@ -264,6 +209,7 @@ export default function (pi: ExtensionAPI) {
 			const diagnostics = await getManager(
 				ctx.cwd,
 				manager,
+				ctx.ui.notify,
 			).collectDiagnostics(params, signal);
 			return {
 				content: [
@@ -297,7 +243,7 @@ export default function (pi: ExtensionAPI) {
 			_onUpdate,
 			ctx,
 		) {
-			const activeManager = getManager(ctx.cwd, manager);
+			const activeManager = getManager(ctx.cwd, manager, ctx.ui.notify);
 			const position = await resolveSymbolPosition(
 				activeManager,
 				params,
@@ -349,7 +295,7 @@ export default function (pi: ExtensionAPI) {
 			_onUpdate,
 			ctx,
 		) {
-			const activeManager = getManager(ctx.cwd, manager);
+			const activeManager = getManager(ctx.cwd, manager, ctx.ui.notify);
 			const position = await resolveSymbolPosition(
 				activeManager,
 				params,
@@ -393,6 +339,7 @@ export default function (pi: ExtensionAPI) {
 			const result = await getManager(
 				ctx.cwd,
 				manager,
+				ctx.ui.notify,
 			).requestWorkspaceSymbols(params.query, signal);
 			return jsonToolResult(result);
 		},
@@ -416,7 +363,7 @@ export default function (pi: ExtensionAPI) {
 				content: [{ type: "text", text: "Refreshing LSP servers..." }],
 				details: {},
 			});
-			await getManager(ctx.cwd, manager).refresh(signal);
+			await getManager(ctx.cwd, manager, ctx.ui.notify).refresh(signal);
 			return {
 				content: [{ type: "text", text: "LSP servers refreshed." }],
 				details: { refreshed: true },
@@ -430,6 +377,7 @@ export default function (pi: ExtensionAPI) {
 			const diagnostics = await getManager(
 				ctx.cwd,
 				manager,
+				ctx.ui.notify,
 			).collectDiagnostics({ scope: "changed" }, ctx.signal);
 			ctx.ui.notify(
 				formatDiagnostics(diagnostics, "LSP diagnostics"),
@@ -441,7 +389,9 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("lsp-refresh", {
 		description: "Restart language servers and clear cached diagnostics",
 		handler: async (_args, ctx) => {
-			await getManager(ctx.cwd, manager).refresh(ctx.signal);
+			await getManager(ctx.cwd, manager, ctx.ui.notify).refresh(
+				ctx.signal,
+			);
 			ctx.ui.notify("LSP servers refreshed.", "info");
 		},
 	});
@@ -449,530 +399,12 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("lsp", {
 		description: "Show running language servers",
 		handler: async (_args, ctx) => {
-			await getManager(ctx.cwd, manager).show(ctx);
+			await getManager(ctx.cwd, manager, ctx.ui.notify).show(ctx);
 		},
 	});
 }
 
-async function resolveSymbolPosition(
-	manager: LspManager,
-	params: SymbolPositionParams,
-	signal: AbortSignal | undefined,
-): Promise<PositionParams | { error: string }> {
-	if (params.line !== undefined && params.character !== undefined) {
-		return {
-			file: params.file,
-			line: params.line,
-			character: params.character,
-		};
-	}
-	if (!params.symbol) {
-		return { error: "Provide either symbol or both line and character." };
-	}
-
-	const result = await manager.requestDocumentSymbols(params.file, signal);
-	if ("error" in result) return result;
-	const match = findDocumentSymbol(result.symbols, params.symbol);
-	if (!match) {
-		return {
-			error: `Could not find symbol ${params.symbol} in ${params.file}.`,
-		};
-	}
-	const position = match.selectionRange?.start ?? match.range?.start;
-	if (!position) {
-		return { error: `Symbol ${params.symbol} did not include a position.` };
-	}
-	return {
-		file: params.file,
-		line: position.line + 1,
-		character: position.character + 1,
-	};
-}
-
-type PositionParams = {
-	file: string;
-	line: number;
-	character: number;
-};
-
-function findDocumentSymbol(symbols: unknown, name: string): any | undefined {
-	if (!Array.isArray(symbols)) return undefined;
-	for (const symbol of symbols) {
-		if (!symbol || typeof symbol !== "object") continue;
-		const candidate = symbol as any;
-		if (candidate.name === name) return candidate;
-		const childMatch = findDocumentSymbol(candidate.children, name);
-		if (childMatch) return childMatch;
-	}
-	return undefined;
-}
-
-function getManager(cwd: string, manager: LspManager | undefined) {
-	return manager && manager.cwd === cwd ? manager : new LspManager(cwd);
-}
-
-function formatOnOffSections(
-	title: string,
-	entries: Array<{ on: boolean; text: string }>,
-	includeOff = false,
-): string {
-	const on = entries.filter((entry) => entry.on).map((entry) => entry.text);
-	const off = entries.filter((entry) => !entry.on).map((entry) => entry.text);
-	const lines = [
-		`${title}:`,
-		"",
-		`On (${on.length}):`,
-		on.length ? on.join("\n") : "- none",
-	];
-	if (includeOff) {
-		lines.push(
-			"",
-			`Off (${off.length}):`,
-			off.length ? off.join("\n") : "- none",
-		);
-	} else if (off.length) {
-		lines.push("", `${off.length} off/configured entries hidden.`);
-	}
-	return lines.join("\n");
-}
-
-async function showToggleView(
-	ctx: ExtensionCommandContext,
-	title: string,
-	entries: Array<{ on: boolean; text: string }>,
-): Promise<void> {
-	await ctx.ui.custom<void>(
-		(tui, theme, kb, done) => {
-			let showAll = false;
-			return {
-				render(width: number) {
-					const running = entries.filter((entry) => entry.on).length;
-					const stopped = entries.length - running;
-					return new BlockFrame(
-						{
-							invalidate() {},
-							render(contentWidth: number) {
-								const help = new KeyHintLine(
-									[
-										{
-											key: "t",
-											label: showAll
-												? "show running only"
-												: "show all configured",
-										},
-										{ key: "esc", label: "close" },
-									],
-									{ theme, accent: gruvbox.blue },
-								).render(contentWidth);
-								return [
-									...help,
-									"",
-									...formatOnOffSections(
-										title,
-										entries,
-										showAll,
-									).split("\n"),
-								].map((line) =>
-									truncateToWidth(line, contentWidth),
-								);
-							},
-						},
-						{
-							title: {
-								title,
-								icon: "",
-								accent: gruvbox.blue,
-								badges: [
-									{
-										text: `${running} running`,
-										bg: gruvbox.bg2,
-									},
-									{
-										text: `${stopped} stopped`,
-										bg: gruvbox.bg2,
-									},
-								],
-								theme,
-							},
-							borderColor: gruvbox.blue,
-							background: gruvbox.bg1,
-							theme,
-							paddingX: 1,
-							paddingY: 1,
-						},
-					).render(width);
-				},
-				invalidate() {},
-				handleInput(data: string) {
-					if (kb.matches(data, "tui.select.cancel")) {
-						done();
-						return;
-					}
-					if (data === "t") showAll = !showAll;
-					tui.requestRender();
-				},
-			};
-		},
-		{ overlay: false },
-	);
-}
-
-class LspManager {
-	private clients = new Map<string, LspClient>();
-	private diagnostics = new Map<string, Diagnostic[]>();
-	private openedDocuments = new Map<string, number>();
-	private mode: "warming" | "ready" | "checking" = "warming";
-	private prewarmed = false;
-
-	constructor(
-		readonly cwd: string,
-		private setStatus: (status: string) => void = () => {},
-	) {}
-
-	async prewarm(signal?: AbortSignal) {
-		this.mode = "warming";
-		this.updateStatus();
-		const files = await discoverFiles(this.cwd, "all", signal);
-		const languages = new Set(
-			files
-				.map((file) => languageByExtension.get(path.extname(file)))
-				.filter((language): language is string => Boolean(language)),
-		);
-		await Promise.all(
-			[...languages].map(async (language) => {
-				const config = servers.find((server) =>
-					server.languages.includes(language),
-				);
-				if (!config) return;
-				await this.getClient(config, signal).catch(() => undefined);
-			}),
-		);
-		this.prewarmed = true;
-		this.mode = "ready";
-		this.updateStatus();
-	}
-
-	async stop() {
-		this.setStatus("lsp: stopping");
-		await Promise.all(
-			[...this.clients.values()].map((client) => client.stop()),
-		);
-		this.clients.clear();
-		this.diagnostics.clear();
-		this.openedDocuments.clear();
-		this.setStatus("");
-	}
-
-	async refresh(signal?: AbortSignal) {
-		this.setStatus("lsp: refreshing");
-		await this.stop();
-		this.prewarmed = false;
-		await this.prewarm(signal);
-	}
-
-	async collectDiagnostics(params: DiagnosticParams, signal?: AbortSignal) {
-		this.mode = "checking";
-		this.updateStatus();
-		try {
-			const requestedFiles = params.files?.length
-				? params.files
-				: await discoverFiles(
-						this.cwd,
-						params.scope ?? "changed",
-						signal,
-					);
-			const candidateFiles = requestedFiles.filter((file) =>
-				languageByExtension.has(path.extname(file)),
-			);
-			if (candidateFiles.length === 0) return [];
-
-			for (const file of candidateFiles) {
-				this.diagnostics.delete(path.normalize(file));
-			}
-			const files = (
-				await Promise.all(
-					candidateFiles.map(async (file) =>
-						(await fileExists(path.resolve(this.cwd, file)))
-							? file
-							: undefined,
-					),
-				)
-			).filter((file): file is string => Boolean(file));
-			if (files.length === 0) return [];
-
-			await Promise.all(
-				files.map(async (file) => {
-					await this.openDocument(file, signal);
-				}),
-			);
-			await delay(1500, signal);
-			return files
-				.flatMap(
-					(file) => this.diagnostics.get(path.normalize(file)) ?? [],
-				)
-				.sort((a, b) =>
-					`${a.file}:${a.line}:${a.character}`.localeCompare(
-						`${b.file}:${b.line}:${b.character}`,
-					),
-				);
-		} finally {
-			this.mode = "ready";
-			this.updateStatus();
-		}
-	}
-
-	async requestAtPosition(
-		params: PositionParams,
-		method: string,
-		extraParams: Record<string, unknown> = {},
-		signal?: AbortSignal,
-	): Promise<{ ok: true; result: unknown } | { ok: false; error: string }> {
-		return await this.withOpenDocument(
-			params.file,
-			signal,
-			async (client, textDocument) => {
-				const result = await client.request(method, {
-					textDocument: { uri: textDocument.uri },
-					position: {
-						line: params.line - 1,
-						character: params.character - 1,
-					},
-					...extraParams,
-				});
-				return { ok: true, result };
-			},
-		);
-	}
-
-	async requestDocumentSymbols(
-		file: string,
-		signal?: AbortSignal,
-	): Promise<{ ok: true; symbols: unknown } | { ok: false; error: string }> {
-		return await this.withOpenDocument(
-			file,
-			signal,
-			async (client, textDocument) => {
-				const symbols = await client.request(
-					"textDocument/documentSymbol",
-					{
-						textDocument: { uri: textDocument.uri },
-					},
-				);
-				return { ok: true, symbols };
-			},
-		);
-	}
-
-	async requestWorkspaceSymbols(
-		query: string,
-		signal?: AbortSignal,
-	): Promise<{ ok: true; result: unknown } | { ok: false; error: string }> {
-		const results: unknown[] = [];
-		const errors: string[] = [];
-		for (const config of servers) {
-			try {
-				const client = await this.getClient(config, signal);
-				results.push(
-					await client.request("workspace/symbol", { query }),
-				);
-			} catch (error) {
-				errors.push(
-					`${config.command}: ${error instanceof Error ? error.message : String(error)}`,
-				);
-			}
-		}
-		if (results.length === 0 && errors.length > 0)
-			return { ok: false, error: errors.join("\n") };
-		return { ok: true, result: results.flat() };
-	}
-
-	async getEntries(
-		signal?: AbortSignal,
-	): Promise<Array<{ on: boolean; text: string }>> {
-		const files = await discoverFiles(this.cwd, "all", signal);
-		const projectLanguages = new Set(
-			files
-				.map((file) => languageByExtension.get(path.extname(file)))
-				.filter((language): language is string => Boolean(language)),
-		);
-		const entries = await Promise.all(
-			servers.map(async (server) => {
-				const key = `${server.command}\0${server.args.join("\0")}`;
-				const executablePath = await commandPath(
-					server.command,
-					this.cwd,
-					signal,
-				);
-				const running = this.clients.get(key)?.started ?? false;
-				const detectedLanguages = server.languages.filter((language) =>
-					projectLanguages.has(language),
-				);
-				const command = [server.command, ...server.args].join(" ");
-				const lines = [
-					`- ${server.languages.join(", ")}`,
-					`  project: ${detectedLanguages.length ? detectedLanguages.join(", ") : "not detected"}`,
-					`  command: ${command}`,
-					`  path: ${executablePath ?? "unavailable"}`,
-				];
-				if (executablePath)
-					lines.push(
-						`  version: ${await commandVersion(executablePath, this.cwd, signal)}`,
-					);
-				lines.push(`  state: ${running ? "running" : "not running"}`);
-				return { on: running, text: lines.join("\n") };
-			}),
-		);
-		return entries;
-	}
-
-	async show(ctx: ExtensionCommandContext): Promise<void> {
-		await showToggleView(ctx, "lsp", await this.getEntries(ctx.signal));
-	}
-
-	private async withOpenDocument<T>(
-		file: string,
-		signal: AbortSignal | undefined,
-		callback: (
-			client: LspClient,
-			textDocument: {
-				uri: string;
-				languageId: string;
-				version: number;
-				text: string;
-			},
-		) => Promise<T>,
-	): Promise<T | { ok: false; error: string }> {
-		try {
-			const { client, textDocument } = await this.openDocument(
-				file,
-				signal,
-			);
-			return await callback(client, textDocument);
-		} catch (error) {
-			return {
-				ok: false,
-				error: error instanceof Error ? error.message : String(error),
-			};
-		}
-	}
-
-	private async openDocument(file: string, signal?: AbortSignal) {
-		const language = languageByExtension.get(path.extname(file));
-		if (!language)
-			throw new Error(`No language server configured for ${file}`);
-		const config = servers.find((server) =>
-			server.languages.includes(language),
-		);
-		if (!config)
-			throw new Error(`No language server configured for ${language}`);
-		const client = await this.getClient(config, signal);
-		const absolutePath = path.resolve(this.cwd, file);
-		const uri = pathToFileURL(absolutePath).toString();
-		const version = (this.openedDocuments.get(uri) ?? 0) + 1;
-		this.openedDocuments.set(uri, version);
-		const textDocument = {
-			uri,
-			languageId: language,
-			version,
-			text: await readFile(absolutePath, "utf8"),
-		};
-		if (version > 1) {
-			client.notify("textDocument/didClose", {
-				textDocument: { uri },
-			});
-		}
-		client.notify("textDocument/didOpen", { textDocument });
-		return { client, textDocument };
-	}
-
-	private async getClient(config: ServerConfig, signal?: AbortSignal) {
-		const key = `${config.command}\0${config.args.join("\0")}`;
-		const existing = this.clients.get(key);
-		if (existing?.started) return existing;
-		if (!(await commandExists(config.command, this.cwd, signal)))
-			throw new Error(`${config.command} is not available on PATH`);
-		const client = new LspClient(this.cwd, config, signal);
-		client.onNotification = (method, params) => {
-			if (method !== "textDocument/publishDiagnostics") return;
-			const value = params as {
-				uri: string;
-				diagnostics?: Array<{
-					range: { start: { line: number; character: number } };
-					severity?: number;
-					source?: string;
-					message: string;
-				}>;
-			};
-			const file = path.normalize(
-				path.relative(this.cwd, fileURLToPath(value.uri)),
-			);
-			this.diagnostics.set(
-				file,
-				(value.diagnostics ?? []).map((diagnostic) => ({
-					file,
-					line: diagnostic.range.start.line + 1,
-					character: diagnostic.range.start.character + 1,
-					severity: severityName(diagnostic.severity),
-					source: diagnostic.source,
-					message: diagnostic.message,
-				})),
-			);
-		};
-		await initializeClient(this.cwd, client, defaultCapabilities());
-		this.clients.set(key, client);
-		this.updateStatus();
-		return client;
-	}
-
-	private updateStatus() {
-		const running = [...this.clients.values()].filter(
-			(client) => client.started,
-		);
-		if (running.length === 0) {
-			this.setStatus(this.prewarmed ? "lsp: none" : "lsp: 󰔟 warming");
-			return;
-		}
-		const icon = this.mode === "checking" ? "" : "";
-		this.setStatus(
-			`lsp: ${running.map((client) => `${icon} ${client.name}`).join("  ")}`,
-		);
-	}
-}
-
-function defaultCapabilities() {
-	return {
-		textDocument: {
-			publishDiagnostics: { relatedInformation: true },
-			documentSymbol: { hierarchicalDocumentSymbolSupport: true },
-			definition: { linkSupport: true },
-			references: {},
-			hover: { contentFormat: ["markdown", "plaintext"] },
-			signatureHelp: {},
-		},
-		workspace: { symbol: { dynamicRegistration: false } },
-	};
-}
-
-async function initializeClient(
-	cwd: string,
-	client: LspClient,
-	capabilities: Record<string, unknown>,
-) {
-	await client.start();
-	await client.request("initialize", {
-		processId: process.pid,
-		rootUri: pathToFileURL(cwd).toString(),
-		capabilities,
-		workspaceFolders: [
-			{ uri: pathToFileURL(cwd).toString(), name: path.basename(cwd) },
-		],
-	});
-	client.notify("initialized", {});
-}
-
-function jsonToolResult(
-	result: { ok: true; result: unknown } | { ok: false; error: string },
-) {
+function jsonToolResult(result: JsonToolResult) {
 	return {
 		content: [
 			{
@@ -986,600 +418,4 @@ function jsonToolResult(
 		details: result,
 		isError: !result.ok,
 	};
-}
-
-const collapsedDiagnosticMessageLines = 16;
-const expandedDiagnosticMessageLines = 120;
-const collapsedResultLines = 12;
-
-type LspToolResult = {
-	content?: Array<{ type: string; text?: string }>;
-	details?: unknown;
-};
-
-type LspToolInfo = {
-	result: LspToolResult;
-	options: { expanded?: boolean; isPartial?: boolean };
-	isError: boolean;
-};
-
-type LspToolRenderContext = {
-	args: unknown;
-	state: unknown;
-	executionStarted: boolean;
-	expanded: boolean;
-	isError: boolean;
-};
-
-type LspToolState = {
-	shell?: ToolShell;
-	info?: LspToolInfo;
-};
-
-function lspToolRenderer(label: string, icon: string, accent: string) {
-	return {
-		renderCall(args: unknown, theme: any, context: LspToolRenderContext) {
-			const state = context.state as LspToolState;
-			const shell = state.shell ?? new ToolShell({ title: label });
-			state.shell = shell;
-			shell.setOptions(
-				buildLspShell(
-					label,
-					icon,
-					accent,
-					args,
-					state.info,
-					theme,
-					context,
-				),
-			);
-			return shell;
-		},
-		renderResult(
-			result: LspToolResult,
-			options: { expanded?: boolean; isPartial?: boolean },
-			theme: any,
-			context: LspToolRenderContext,
-		) {
-			const state = context.state as LspToolState;
-			state.info = { result, options, isError: context.isError };
-			state.shell?.setOptions(
-				buildLspShell(
-					label,
-					icon,
-					accent,
-					context.args,
-					state.info,
-					theme,
-					context,
-				),
-			);
-			return new StaticLines([]);
-		},
-	};
-}
-
-function buildLspShell(
-	label: string,
-	icon: string,
-	accent: string,
-	args: unknown,
-	info: LspToolInfo | undefined,
-	theme: any,
-	context: Pick<LspToolRenderContext, "executionStarted" | "expanded">,
-): ToolShellOptions {
-	const diagnostics = diagnosticsFromDetails(info?.result.details);
-	const counts = severityCounts(diagnostics);
-	const hasErrors =
-		counts.error > 0 ||
-		info?.isError ||
-		isFailedLspDetails(info?.result.details);
-	const hasWarnings = counts.warning > 0;
-	const isPending = !info || info.options.isPartial;
-	const expanded = info?.options.expanded ?? context.expanded;
-	const text =
-		lspTextOutput(info?.result) ||
-		(isPending
-			? context.executionStarted
-				? "Working..."
-				: "Queued..."
-			: "No output");
-	const textLines = splitTextLines(text);
-	const hidden = expanded
-		? 0
-		: Math.max(0, textLines.length - collapsedResultLines);
-
-	const invocation = summarizeLspInvocation(label, icon, args);
-	const telemetry = [...severityBadges(counts)];
-	if (hidden > 0) {
-		telemetry.push({
-			text: `${hidden} hidden`,
-			bg: gruvbox.bg1,
-		});
-	}
-
-	return {
-		title: label,
-		icon,
-		accent: hasErrors ? gruvbox.red : hasWarnings ? gruvbox.yellow : accent,
-		state: hasErrors
-			? "error"
-			: isPending
-				? "pending"
-				: hasWarnings
-					? "neutral"
-					: "success",
-		status: hasErrors
-			? "errors"
-			: isPending
-				? context.executionStarted
-					? "running"
-					: "queued"
-				: hasWarnings
-					? "warnings"
-					: diagnostics.length > 0
-						? "clean"
-						: "ok",
-		invocation,
-		telemetry,
-		expansion: { expanded },
-		theme,
-		children: new LspResultPane(text, theme, {
-			maxLines: expanded ? 200 : collapsedResultLines,
-			expansionLimit: collapsedResultLines,
-		}),
-	};
-}
-
-class LspResultPane extends CachedComponent implements ExpansionAwareComponent {
-	private readonly lines: string[];
-
-	constructor(
-		text: string,
-		private readonly theme: any,
-		private readonly options: { maxLines: number; expansionLimit: number },
-	) {
-		super();
-		this.lines = splitTextLines(text);
-	}
-
-	hasExpandableContent(): boolean {
-		return this.lines.length > this.options.expansionLimit;
-	}
-
-	protected doRender(width: number): string[] {
-		const visible = this.lines.slice(0, this.options.maxLines);
-		return visible.map((line) =>
-			truncateToWidth(
-				colorizeLspLine(expandTabs(line), this.theme),
-				width,
-				"",
-			),
-		);
-	}
-}
-
-function summarizeLspInvocation(
-	label: string,
-	icon: string,
-	args: unknown,
-): InvocationLineOptions | undefined {
-	if (!args || typeof args !== "object") return undefined;
-	const value = args as Record<string, unknown>;
-	const invocationArgs: NonNullable<InvocationLineOptions["args"]> = [];
-
-	if (typeof value.symbol === "string") {
-		invocationArgs.push({
-			label: "symbol",
-			value: `"${formatArgValue(value.symbol)}"`,
-		});
-	}
-	if (Array.isArray(value.files) && value.files.length > 0) {
-		invocationArgs.push(
-			value.files.length === 1
-				? { label: "file", value: formatArgValue(value.files[0]) }
-				: { label: "files", value: `${value.files.length} files` },
-		);
-	} else if (typeof value.file === "string") {
-		invocationArgs.push({
-			label: "file",
-			value: formatArgValue(value.file),
-		});
-	} else if (typeof value.scope === "string") {
-		invocationArgs.push({ label: "scope", value: value.scope });
-	}
-
-	if (typeof value.query === "string") {
-		invocationArgs.push({
-			label: "query",
-			value: `"${formatArgValue(value.query)}"`,
-		});
-	}
-	if (typeof value.line === "number" || typeof value.character === "number") {
-		invocationArgs.push({
-			label: "position",
-			value: `${value.line ?? "?"}:${value.character ?? "?"}`,
-		});
-	}
-
-	if (invocationArgs.length === 0) return undefined;
-	return { command: label, icon, args: invocationArgs };
-}
-
-function severityBadges(
-	counts: Record<DiagnosticSeverity, number>,
-): BadgeSpec[] {
-	return (["error", "warning", "info", "hint", "unknown"] as const)
-		.filter((severity) => counts[severity] > 0)
-		.map((severity) => ({
-			text: `${counts[severity]} ${severity}`,
-			fg: severity === "warning" ? gruvbox.bg : gruvbox.fg0,
-			bg: severityColor(severity),
-		}));
-}
-
-function formatArgValue(value: unknown) {
-	if (typeof value !== "string") return String(value);
-	return value.replace(/^@/, "");
-}
-
-function lspTextOutput(result: LspToolResult | undefined): string {
-	return (
-		result?.content
-			?.filter(
-				(content) =>
-					content.type === "text" && typeof content.text === "string",
-			)
-			.map((content) => content.text ?? "")
-			.join("\n")
-			.trimEnd() ?? ""
-	);
-}
-
-function splitTextLines(text: string): string[] {
-	return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
-}
-
-function colorizeLspLine(line: string, theme: any): string {
-	const match = line.match(
-		/^(?<prefix>-\s+.*?:\d+:\d+:\s+)(?<severity>error|warning|info|hint|unknown)(?<suffix>.*)$/,
-	);
-	if (!match?.groups) return line;
-	const severity = match.groups.severity as DiagnosticSeverity;
-	const token = severityThemeToken(severity);
-	return `${theme.fg("muted", match.groups.prefix)}${theme.fg(token, severity)}${theme.fg("toolOutput", match.groups.suffix ?? "")}`;
-}
-
-type DiagnosticSeverity = "error" | "warning" | "info" | "hint" | "unknown";
-
-function diagnosticsFromDetails(details: unknown): Diagnostic[] {
-	if (!details || typeof details !== "object") return [];
-	const diagnostics = (details as { diagnostics?: unknown }).diagnostics;
-	if (!Array.isArray(diagnostics)) return [];
-	return diagnostics.filter(isDiagnostic);
-}
-
-function isFailedLspDetails(details: unknown): boolean {
-	return (
-		typeof details === "object" &&
-		details !== null &&
-		(details as { ok?: unknown }).ok === false
-	);
-}
-
-function isDiagnostic(value: unknown): value is Diagnostic {
-	return (
-		typeof value === "object" &&
-		value !== null &&
-		typeof (value as Diagnostic).file === "string" &&
-		typeof (value as Diagnostic).line === "number" &&
-		typeof (value as Diagnostic).character === "number" &&
-		typeof (value as Diagnostic).severity === "string" &&
-		typeof (value as Diagnostic).message === "string"
-	);
-}
-
-function severityCounts(
-	diagnostics: Diagnostic[],
-): Record<DiagnosticSeverity, number> {
-	const counts: Record<DiagnosticSeverity, number> = {
-		error: 0,
-		warning: 0,
-		info: 0,
-		hint: 0,
-		unknown: 0,
-	};
-	for (const diagnostic of diagnostics) {
-		const severity = normalizeDiagnosticSeverity(diagnostic.severity);
-		counts[severity] += 1;
-	}
-	return counts;
-}
-
-function normalizeDiagnosticSeverity(severity: string): DiagnosticSeverity {
-	if (
-		severity === "error" ||
-		severity === "warning" ||
-		severity === "info" ||
-		severity === "hint"
-	) {
-		return severity;
-	}
-	return "unknown";
-}
-
-function severityColor(severity: DiagnosticSeverity): string {
-	if (severity === "error") return gruvbox.red;
-	if (severity === "warning") return gruvbox.yellow;
-	if (severity === "info") return gruvbox.blue;
-	if (severity === "hint") return gruvbox.aqua;
-	return gruvbox.bg3;
-}
-
-function severityThemeToken(
-	severity: DiagnosticSeverity,
-): "error" | "warning" | "accent" | "success" | "muted" {
-	if (severity === "error") return "error";
-	if (severity === "warning") return "warning";
-	if (severity === "info") return "accent";
-	if (severity === "hint") return "success";
-	return "muted";
-}
-
-class LspClient {
-	onNotification?: (method: string, params: unknown) => void;
-	started = false;
-	readonly name: string;
-	private proc?: ChildProcessWithoutNullStreams;
-	private nextId = 1;
-	private buffer = Buffer.alloc(0);
-	private pending = new Map<
-		number,
-		{ resolve: (value: unknown) => void; reject: (error: Error) => void }
-	>();
-
-	constructor(
-		private cwd: string,
-		private config: ServerConfig,
-		private signal?: AbortSignal,
-	) {
-		this.name = config.command;
-	}
-
-	async start() {
-		if (this.started) return;
-		this.started = true;
-		this.proc = spawn(this.config.command, this.config.args, {
-			cwd: this.cwd,
-			signal: this.signal,
-		});
-		this.proc.stdout.on("data", (chunk: Buffer) => this.read(chunk));
-		this.proc.stderr.on("data", () => {});
-		this.proc.on("error", (error) => this.rejectAll(error));
-		this.proc.on("exit", (code) =>
-			this.rejectAll(
-				new Error(`${this.config.command} exited with ${code}`),
-			),
-		);
-	}
-
-	async request(method: string, params: unknown) {
-		const id = this.nextId++;
-		this.send({ jsonrpc: "2.0", id, method, params });
-		return await new Promise((resolve, reject) => {
-			this.pending.set(id, { resolve, reject });
-			setTimeout(() => {
-				if (!this.pending.delete(id)) return;
-				reject(
-					new Error(`${method} timed out for ${this.config.command}`),
-				);
-			}, 10_000);
-		});
-	}
-
-	notify(method: string, params: unknown) {
-		this.send({ jsonrpc: "2.0", method, params });
-	}
-
-	async stop() {
-		if (!this.proc) return;
-		try {
-			this.notify("shutdown", null);
-			this.notify("exit", null);
-		} catch {}
-		this.proc.kill("SIGTERM");
-		this.started = false;
-	}
-
-	private send(message: RpcMessage) {
-		if (!this.proc)
-			throw new Error(`${this.config.command} is not running`);
-		const body = Buffer.from(JSON.stringify(message), "utf8");
-		this.proc.stdin.write(`Content-Length: ${body.length}\r\n\r\n`);
-		this.proc.stdin.write(body);
-	}
-
-	private read(chunk: Buffer) {
-		this.buffer = Buffer.concat([this.buffer, chunk]);
-		while (true) {
-			const headerEnd = this.buffer.indexOf("\r\n\r\n");
-			if (headerEnd < 0) return;
-			const header = this.buffer.subarray(0, headerEnd).toString("utf8");
-			const match = /Content-Length: (\d+)/i.exec(header);
-			if (!match)
-				throw new Error(
-					`Invalid LSP header from ${this.config.command}`,
-				);
-			const length = Number(match[1]);
-			const bodyStart = headerEnd + 4;
-			const bodyEnd = bodyStart + length;
-			if (this.buffer.length < bodyEnd) return;
-			const message = JSON.parse(
-				this.buffer.subarray(bodyStart, bodyEnd).toString("utf8"),
-			) as RpcMessage;
-			this.buffer = this.buffer.subarray(bodyEnd);
-			this.handle(message);
-		}
-	}
-
-	private handle(message: RpcMessage) {
-		if (
-			message.id !== undefined &&
-			(message.result !== undefined || message.error !== undefined)
-		) {
-			const pending = this.pending.get(message.id);
-			if (!pending) return;
-			this.pending.delete(message.id);
-			if (message.error)
-				pending.reject(new Error(JSON.stringify(message.error)));
-			else pending.resolve(message.result);
-			return;
-		}
-		if (message.method)
-			this.onNotification?.(message.method, message.params);
-	}
-
-	private rejectAll(error: Error) {
-		for (const pending of this.pending.values()) pending.reject(error);
-		this.pending.clear();
-	}
-}
-
-async function discoverFiles(
-	cwd: string,
-	scope: "changed" | "all",
-	signal?: AbortSignal,
-): Promise<string[]> {
-	const jjFiles = await discoverJjFiles(cwd, scope, signal);
-	if (jjFiles) return jjFiles;
-
-	const command =
-		scope === "all"
-			? "git ls-files"
-			: "git diff --name-only --diff-filter=ACMR HEAD && git ls-files --others --exclude-standard";
-	const result = await runShell(cwd, command, signal);
-	if (result.exitCode !== 0) return [];
-	return uniqueLines(result.stdout);
-}
-
-async function discoverJjFiles(
-	cwd: string,
-	scope: "changed" | "all",
-	signal?: AbortSignal,
-): Promise<string[] | undefined> {
-	const root = await runShell(cwd, "jj root --ignore-working-copy", signal);
-	if (root.exitCode !== 0) return undefined;
-
-	const command =
-		scope === "all"
-			? "jj file list --ignore-working-copy"
-			: "jj diff --name-only --ignore-working-copy -r @";
-	const result = await runShell(cwd, command, signal);
-	return result.exitCode === 0 ? uniqueLines(result.stdout) : undefined;
-}
-
-function uniqueLines(value: string): string[] {
-	return [
-		...new Set(
-			value
-				.split("\n")
-				.map((line) => line.trim())
-				.filter(Boolean),
-		),
-	];
-}
-
-async function fileExists(file: string) {
-	try {
-		await access(file);
-		return true;
-	} catch {
-		return false;
-	}
-}
-
-async function commandPath(
-	command: string,
-	cwd: string,
-	signal?: AbortSignal,
-): Promise<string | undefined> {
-	const result = await runShell(
-		cwd,
-		`command -v ${shellQuote(command)}`,
-		signal,
-	);
-	const path = result.stdout.trim();
-	return result.exitCode === 0 && path ? path : undefined;
-}
-
-async function commandExists(
-	command: string,
-	cwd: string,
-	signal?: AbortSignal,
-) {
-	return Boolean(await commandPath(command, cwd, signal));
-}
-
-async function commandVersion(
-	command: string,
-	cwd: string,
-	signal?: AbortSignal,
-): Promise<string> {
-	const quoted = shellQuote(command);
-	const result = await runShell(
-		cwd,
-		`${quoted} --version 2>&1 | head -n 1 || ${quoted} version 2>&1 | head -n 1`,
-		signal,
-	);
-	const version = result.stdout.trim();
-	return result.exitCode === 0 && version ? version : "unknown";
-}
-
-async function runShell(cwd: string, command: string, signal?: AbortSignal) {
-	return await new Promise<{ stdout: string; exitCode: number }>(
-		(resolve) => {
-			const proc = spawn("/bin/sh", ["-lc", command], { cwd, signal });
-			let stdout = "";
-			proc.stdout.on("data", (data) => (stdout += data));
-			proc.on("error", () => resolve({ stdout, exitCode: 1 }));
-			proc.on("close", (code) =>
-				resolve({ stdout, exitCode: code ?? 1 }),
-			);
-		},
-	);
-}
-
-function severityName(severity?: number) {
-	if (severity === 1) return "error";
-	if (severity === 2) return "warning";
-	if (severity === 3) return "info";
-	if (severity === 4) return "hint";
-	return "unknown";
-}
-
-function formatDiagnostics(diagnostics: Diagnostic[], title: string) {
-	if (diagnostics.length === 0) return `${title}: none.`;
-	const shown = diagnostics.slice(0, 80).map((diagnostic) => {
-		const source = diagnostic.source ? ` [${diagnostic.source}]` : "";
-		return `- ${diagnostic.file}:${diagnostic.line}:${diagnostic.character}: ${diagnostic.severity}${source}: ${diagnostic.message}`;
-	});
-	const suffix =
-		diagnostics.length > shown.length
-			? `\n... ${diagnostics.length - shown.length} more diagnostics omitted.`
-			: "";
-	return `${title} (${diagnostics.length}):\n${shown.join("\n")}${suffix}`;
-}
-
-async function delay(ms: number, signal?: AbortSignal) {
-	await new Promise<void>((resolve, reject) => {
-		const timer = setTimeout(resolve, ms);
-		signal?.addEventListener("abort", () => {
-			clearTimeout(timer);
-			reject(new Error("Aborted"));
-		});
-	});
-}
-
-function shellQuote(value: string) {
-	return `'${value.replace(/'/g, `'"'"'`)}'`;
 }

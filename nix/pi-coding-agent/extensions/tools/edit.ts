@@ -5,8 +5,8 @@ import {
 	type Theme,
 	type ToolDefinition,
 	type ToolRenderResultOptions,
-} from "@mariozechner/pi-coding-agent";
-import { Text, type Component } from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-coding-agent";
+import { Text, type Component } from "@earendil-works/pi-tui";
 import {
 	CachedComponent,
 	gruvbox,
@@ -23,13 +23,7 @@ import { readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import {
-	countLines,
-	displayPath,
-	firstTextLine,
-	safeString,
-	textOutput,
-} from "./shared.ts";
+import { countLines, firstTextLine, textOutput } from "./shared.ts";
 
 const COLLAPSED_RENDERED_LINES = 32;
 const EXPANDED_RENDERED_LINES = 160;

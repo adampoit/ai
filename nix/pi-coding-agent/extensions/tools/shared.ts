@@ -2,12 +2,11 @@ import type {
 	AgentToolResult,
 	Theme,
 	ToolRenderResultOptions,
-} from "@mariozechner/pi-coding-agent";
-import { truncateToWidth } from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-coding-agent";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import {
 	CachedComponent,
 	fillAnsiLine,
-	gruvbox,
 	ToolShell,
 	type ExpansionAwareComponent,
 } from "../../components/index.ts";

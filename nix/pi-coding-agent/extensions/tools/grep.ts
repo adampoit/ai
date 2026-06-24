@@ -3,8 +3,8 @@ import type {
 	GrepToolDetails,
 	GrepToolInput,
 	Theme,
-} from "@mariozechner/pi-coding-agent";
-import { createGrepToolDefinition } from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
+import { createGrepToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
 	gruvbox,
 	StaticLines,

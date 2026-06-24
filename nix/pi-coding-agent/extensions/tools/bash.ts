@@ -3,9 +3,9 @@ import type {
 	BashToolInput,
 	ExtensionAPI,
 	Theme,
-} from "@mariozechner/pi-coding-agent";
-import { createBashToolDefinition } from "@mariozechner/pi-coding-agent";
-import { truncateToWidth } from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-coding-agent";
+import { createBashToolDefinition } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import {
 	gruvbox,
 	StaticLines,

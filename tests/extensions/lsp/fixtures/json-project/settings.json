@@ -1,0 +1,6 @@
+{
+	"serviceName": "pi",
+	"features": {
+		"lsp": true
+	}
+}

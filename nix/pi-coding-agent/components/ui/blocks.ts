@@ -2,13 +2,13 @@ import {
 	getLanguageFromPath,
 	highlightCode,
 	keyText,
-} from "@mariozechner/pi-coding-agent";
-import type { Component } from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
 import {
 	truncateToWidth,
 	visibleWidth,
 	wrapTextWithAnsi,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
 import { fillAnsiLine } from "./ansi.ts";
 import { gruvbox } from "./gruvbox.ts";
 import { CachedComponent, Inset, Stack, StaticLines } from "./layout.ts";

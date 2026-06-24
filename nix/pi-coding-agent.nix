@@ -13,6 +13,26 @@
     cp -R ${piAgentSource}/extensions $out/extensions
   '';
 
+  vscodeLangservers = pkgs.runCommand "vscode-langservers-extracted-node22" {} ''
+    mkdir -p $out
+    cp -R ${pkgs.vscode-langservers-extracted}/* $out/
+    chmod -R u+w $out
+    writeWrapper() {
+      local name="$1"
+      local entrypoint="$2"
+      printf '%s\n' \
+        '#!${pkgs.runtimeShell}' \
+        "exec ${pkgs.nodejs_22}/bin/node \"$out/lib/extensions/$entrypoint\" \"\$@\"" \
+        > "$out/bin/$name"
+      chmod +x "$out/bin/$name"
+    }
+
+    writeWrapper vscode-html-language-server html-language-features/server/dist/node/htmlServerMain.js
+    writeWrapper vscode-css-language-server css-language-features/server/dist/node/cssServerMain.js
+    writeWrapper vscode-json-language-server json-language-features/server/dist/node/jsonServerMain.js
+    writeWrapper vscode-eslint-language-server eslint-language-features/server/out/eslintServer.js
+  '';
+
   settings = {
     theme = lib.mkDefault "gruvbox";
     hideThinkingBlock = lib.mkDefault false;
@@ -21,21 +41,31 @@
 
   piExtraPackages = [
     pkgs.alejandra
+    pkgs.basedpyright
+    pkgs.bash-language-server
     pkgs.clang-tools
     pkgs.delta
     (pkgs.lib.lowPrio pkgs.dotnet-sdk)
+    pkgs.kotlin-language-server
     pkgs.ktlint
     pkgs.lua-language-server
+    pkgs.marksman
     pkgs.nixd
     pkgs.prettier
     pkgs.roslyn-ls
     pkgs.ruff
     pkgs.shfmt
+    pkgs.sourcekit-lsp
+    pkgs.swift
+    pkgs.swiftpm
     pkgs.sqlfluff
     pkgs.stylua
     pkgs.swiftlint
     pkgs.terraform
+    pkgs.terraform-ls
+    vscodeLangservers
     pkgs.vtsls
+    pkgs.yaml-language-server
   ];
 
   localSkillsDir = ../skills;

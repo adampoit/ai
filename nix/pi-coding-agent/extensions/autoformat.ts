@@ -1,8 +1,8 @@
 import type {
 	ExtensionAPI,
 	ExtensionContext,
-} from "@mariozechner/pi-coding-agent";
-import { truncateToWidth } from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-coding-agent";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import { BlockFrame, gruvbox, KeyHintLine } from "../components/index.ts";
 import {
 	existsSync,
@@ -867,7 +867,7 @@ export default function (pi: ExtensionAPI) {
 		return { details: newDetails };
 	});
 
-	pi.on("turn_end", async (event, ctx) => {
+	pi.on("turn_end", async (_event, ctx) => {
 		const cwd = resolve(ctx.cwd);
 		const modifiedFiles = await getModifiedFiles(pi, cwd, ctx.signal);
 		const formatted: { path: string; formatter: string }[] = [];

@@ -68,15 +68,16 @@ programs.pi-coding-agent.settings.enabledModels = [
 For module-related edits, validate syntax with:
 
 ```bash
-nix flake show --no-write-lock-file
+nix flake show
 nix-instantiate --parse ./nix/opencode.nix
 nix-instantiate --parse ./nix/pi-coding-agent.nix
 ```
 
-For Pi TypeScript extension edits, run:
+For Pi TypeScript extension edits, run typechecking and tests from the dev shell so the expected language servers are available:
 
 ```bash
-npm run typecheck
+nix develop -c npm run typecheck
+nix develop -c npm test
 ```
 
 ## License

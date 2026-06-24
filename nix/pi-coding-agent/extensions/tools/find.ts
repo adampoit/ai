@@ -3,8 +3,8 @@ import type {
 	FindToolDetails,
 	FindToolInput,
 	Theme,
-} from "@mariozechner/pi-coding-agent";
-import { createFindToolDefinition } from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
+import { createFindToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
 	gruvbox,
 	StaticLines,

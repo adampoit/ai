@@ -4,20 +4,20 @@ import type {
 	ExtensionContext,
 	SessionEntry,
 	ToolCallEvent,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import {
 	Container,
 	getKeybindings,
 	Input,
 	truncateToWidth,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
 import {
 	BlockFrame,
 	gruvbox,
 	KeyHintLine,
 	renderBadge,
 } from "../components/index.ts";
-import type { Focusable } from "@mariozechner/pi-tui";
+import type { Focusable } from "@earendil-works/pi-tui";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
