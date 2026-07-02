@@ -68,6 +68,43 @@
     pkgs.yaml-language-server
   ];
 
+  impeccableBuildNpmPackage = pkgs.buildNpmPackage.override {nodejs = pkgs.nodejs_24;};
+  impeccablePiSkill = impeccableBuildNpmPackage rec {
+    pname = "impeccable-pi-skill";
+    version = "3.9.1";
+
+    src = pkgs.fetchFromGitHub {
+      owner = "pbakaus";
+      repo = "impeccable";
+      rev = "skill-v${version}";
+      hash = "sha256-YNNxyGiB5w4K8t/eRnD6wsW3Ot4ZQXPqg8IkPz730D4=";
+    };
+
+    postPatch = ''
+      cp ${./impeccable/package-lock.json} package-lock.json
+    '';
+
+    npmDepsHash = "sha256-jDvanWIcycPPwOMVSdpTsrEbpaHct9d+G2eNZnCcNcM=";
+    dontNpmBuild = true;
+    PUPPETEER_SKIP_DOWNLOAD = "1";
+
+    installPhase = ''
+      runHook preInstall
+
+      node scripts/build.js --skip-root-sync
+      mkdir -p $out
+      cp -R dist/pi/.pi/skills/impeccable/* $out/
+
+      while IFS= read -r file; do
+        substituteInPlace "$file" \
+          --replace-quiet 'node .pi/skills/impeccable/scripts/' 'node ./scripts/' \
+          --replace-quiet 'Bash(node .pi/skills/impeccable/scripts/*)' 'Bash(node ./scripts/*)'
+      done < <(find $out -name '*.md')
+
+      runHook postInstall
+    '';
+  };
+
   localSkillsDir = ../skills;
   localSkillEntries = builtins.readDir localSkillsDir;
   localSkillNames =
@@ -80,6 +117,10 @@
     })
     localSkillNames
     ++ [
+      {
+        name = "impeccable";
+        path = impeccablePiSkill;
+      }
       {
         name = "playwright-cli";
         path = pkgs.playwright-cli + "/share/opencode/skills/playwright-cli";
