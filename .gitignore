@@ -1,5 +1,6 @@
 .DS_Store
 .direnv/
+kls_database.db
 node_modules/
 tests/extensions/lsp/fixtures/csharp-project/bin/
 tests/extensions/lsp/fixtures/csharp-project/obj/

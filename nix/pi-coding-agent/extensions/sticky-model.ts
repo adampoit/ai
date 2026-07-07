@@ -8,12 +8,21 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 type StickyModel = {
 	provider: string;
 	model: string;
-	thinkingLevel?: ThinkingLevel;
+	thinkingLevels?: Record<string, ThinkingLevel>;
 };
 
 type Store = Record<string, StickyModel>;
 
 const storePath = join(homedir(), ".pi", "agent", "sticky-models.json");
+
+function modelKey(provider: string, model: string) {
+	return `${provider}/${model}`;
+}
+
+function getSavedThinkingLevel(saved: StickyModel | undefined) {
+	if (!saved) return undefined;
+	return saved.thinkingLevels?.[modelKey(saved.provider, saved.model)];
+}
 
 async function readStore(): Promise<Store> {
 	try {
@@ -70,7 +79,8 @@ export default function (pi: ExtensionAPI) {
 			ctx.model?.provider === saved.provider &&
 			ctx.model.id === saved.model;
 		if (modelAlreadySelected) {
-			if (saved.thinkingLevel) pi.setThinkingLevel(saved.thinkingLevel);
+			const thinkingLevel = getSavedThinkingLevel(saved);
+			if (thinkingLevel) pi.setThinkingLevel(thinkingLevel);
 			return;
 		}
 
@@ -93,7 +103,8 @@ export default function (pi: ExtensionAPI) {
 				);
 				return;
 			}
-			if (saved.thinkingLevel) pi.setThinkingLevel(saved.thinkingLevel);
+			const thinkingLevel = getSavedThinkingLevel(saved);
+			if (thinkingLevel) pi.setThinkingLevel(thinkingLevel);
 		} finally {
 			queueMicrotask(() => {
 				applyingStickyModel = false;
@@ -105,25 +116,43 @@ export default function (pi: ExtensionAPI) {
 		if (applyingStickyModel) return;
 		if (event.source !== "set" && event.source !== "cycle") return;
 
+		let thinkingLevelToRestore: ThinkingLevel | undefined;
 		await updateStore((store) => {
+			const current = store[ctx.cwd];
+			const key = modelKey(event.model.provider, event.model.id);
+			thinkingLevelToRestore = current?.thinkingLevels?.[key];
+			const thinkingLevel =
+				thinkingLevelToRestore ?? pi.getThinkingLevel();
+
 			store[ctx.cwd] = {
 				provider: event.model.provider,
 				model: event.model.id,
-				thinkingLevel: pi.getThinkingLevel(),
+				thinkingLevels: {
+					...current?.thinkingLevels,
+					[key]: thinkingLevel,
+				},
 			};
 		});
+
+		if (thinkingLevelToRestore) {
+			pi.setThinkingLevel(thinkingLevelToRestore);
+		}
 	});
 
 	pi.on("thinking_level_select", async (event, ctx) => {
 		await updateStore((store) => {
-			const provider = ctx.model?.provider ?? store[ctx.cwd]?.provider;
-			const model = ctx.model?.id ?? store[ctx.cwd]?.model;
+			const current = store[ctx.cwd];
+			const provider = ctx.model?.provider ?? current?.provider;
+			const model = ctx.model?.id ?? current?.model;
 			if (!provider || !model) return;
 
 			store[ctx.cwd] = {
 				provider,
 				model,
-				thinkingLevel: event.level,
+				thinkingLevels: {
+					...current?.thinkingLevels,
+					[modelKey(provider, model)]: event.level,
+				},
 			};
 		});
 	});

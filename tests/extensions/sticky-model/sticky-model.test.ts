@@ -63,7 +63,9 @@ test("sticky-model persists selected model and reapplies it on session start", a
 		assert.deepEqual(store[ctx.cwd], {
 			provider: "openai",
 			model: "gpt-test",
-			thinkingLevel: "medium",
+			thinkingLevels: {
+				"openai/gpt-test": "medium",
+			},
 		});
 
 		const restoredModel = { provider: "openai", id: "gpt-test" };
@@ -84,6 +86,68 @@ test("sticky-model persists selected model and reapplies it on session start", a
 
 		assert.deepEqual(restorePi.selectedModels, [restoredModel]);
 		assert.deepEqual(restorePi.selectedThinkingLevels, ["medium"]);
+	} finally {
+		process.env.HOME = oldHome;
+	}
+});
+
+test("sticky-model restores thinking levels per selected model", async () => {
+	const oldHome = process.env.HOME;
+	const home = await mkdtemp(path.join(tmpdir(), "pi-sticky-home-"));
+	try {
+		const stickyModelExtension = await importStickyModelExtension(home);
+		const pi = loadExtension(stickyModelExtension);
+		const ctx = await createContext({ cwd: "/tmp/project-a" });
+
+		pi.thinkingLevel = "medium";
+		await pi.emit(
+			"model_select",
+			{
+				source: "set",
+				model: { provider: "openai", id: "gpt-a" },
+			},
+			ctx,
+		);
+
+		pi.thinkingLevel = "high";
+		await pi.emit(
+			"model_select",
+			{
+				source: "set",
+				model: { provider: "anthropic", id: "claude-b" },
+			},
+			ctx,
+		);
+		ctx.model = { provider: "anthropic", id: "claude-b" };
+		await pi.emit("thinking_level_select", { level: "low" }, ctx);
+
+		pi.thinkingLevel = "low";
+		await pi.emit(
+			"model_select",
+			{
+				source: "set",
+				model: { provider: "openai", id: "gpt-a" },
+			},
+			ctx,
+		);
+
+		assert.equal(pi.thinkingLevel, "medium");
+		assert.deepEqual(pi.selectedThinkingLevels, ["medium"]);
+
+		const store = JSON.parse(
+			await readFile(
+				path.join(home, ".pi/agent/sticky-models.json"),
+				"utf8",
+			),
+		);
+		assert.deepEqual(store[ctx.cwd], {
+			provider: "openai",
+			model: "gpt-a",
+			thinkingLevels: {
+				"openai/gpt-a": "medium",
+				"anthropic/claude-b": "low",
+			},
+		});
 	} finally {
 		process.env.HOME = oldHome;
 	}
