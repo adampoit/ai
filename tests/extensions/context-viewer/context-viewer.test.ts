@@ -13,7 +13,7 @@ test("context-viewer extension registers its public surface", () => {
 
 	assertPublicSurface(pi, {
 		commands: ["context"],
-		handlers: ["before_agent_start", "context"],
+		handlers: ["before_agent_start", "before_provider_request", "context"],
 	});
 });
 

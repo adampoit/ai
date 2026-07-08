@@ -37,6 +37,7 @@
     theme = lib.mkDefault "gruvbox";
     hideThinkingBlock = lib.mkDefault false;
     enableSkillCommands = lib.mkDefault true;
+    packages = ["npm:pi-web-access@0.13.0"];
   };
 
   piExtraPackages = [
@@ -46,6 +47,7 @@
     pkgs.clang-tools
     pkgs.delta
     (pkgs.lib.lowPrio pkgs.dotnet-sdk)
+    pkgs.ffmpeg
     pkgs.kotlin-language-server
     pkgs.ktlint
     pkgs.lua-language-server
@@ -66,6 +68,7 @@
     vscodeLangservers
     pkgs.vtsls
     pkgs.yaml-language-server
+    pkgs.yt-dlp
   ];
 
   impeccableBuildNpmPackage = pkgs.buildNpmPackage.override {nodejs = pkgs.nodejs_24;};

@@ -37,6 +37,8 @@ type PromptSnapshot = {
 	prompt: string;
 	systemPrompt: string;
 	options: BuildSystemPromptOptions;
+	providerPayloadAt?: number;
+	providerPayloadText?: string;
 };
 
 type ContextSnapshot = {
@@ -88,6 +90,14 @@ function jsonPreview(value: unknown, max = 180): string {
 		return oneLine(JSON.stringify(value), max);
 	} catch {
 		return String(value);
+	}
+}
+
+function jsonPrettyPreview(value: unknown, max = 50_000): string {
+	try {
+		return JSON.stringify(value, null, 2).slice(0, max);
+	} catch {
+		return String(value).slice(0, max);
 	}
 }
 
@@ -407,6 +417,7 @@ function parseContextFilesFromPrompt(prompt: string): ContextFileInfo[] {
 
 function contextFiles(
 	lastPrompt: PromptSnapshot | undefined,
+	messages: AgentMessage[] = [],
 ): ContextFileInfo[] {
 	const merged = new Map<string, ContextFileInfo>();
 	for (const file of lastPrompt?.options.contextFiles ?? []) {
@@ -414,6 +425,14 @@ function contextFiles(
 	}
 	for (const file of parseContextFilesFromPrompt(promptText(lastPrompt))) {
 		merged.set(file.path, file);
+	}
+	for (const message of messages) {
+		if (message.role !== "custom") continue;
+		const custom = message as AgentMessage & { content?: unknown };
+		if (typeof custom.content !== "string") continue;
+		for (const file of parseContextFilesFromPrompt(custom.content)) {
+			merged.set(file.path, file);
+		}
 	}
 	return Array.from(merged.values());
 }
@@ -444,8 +463,11 @@ function promptSkills(lastPrompt: PromptSnapshot | undefined): SkillInfo[] {
 		: parseSkillsFromPrompt(promptText(lastPrompt));
 }
 
-function contextFileTokens(lastPrompt: PromptSnapshot | undefined): number {
-	return contextFiles(lastPrompt).reduce(
+function contextFileTokens(
+	lastPrompt: PromptSnapshot | undefined,
+	messages: AgentMessage[] = [],
+): number {
+	return contextFiles(lastPrompt, messages).reduce(
 		(total, file) => total + estimateTextTokens(file.content),
 		0,
 	);
@@ -503,9 +525,9 @@ function contextSlices(
 ): ContextSlice[] {
 	const prompt = lastPrompt?.systemPrompt;
 	const promptTokens = prompt ? estimateTextTokens(prompt) : 0;
-	const fileInfos = contextFiles(lastPrompt);
+	const fileInfos = contextFiles(lastPrompt, snapshot.messages);
 	const skillInfos = promptSkills(lastPrompt);
-	const files = contextFileTokens(lastPrompt);
+	const files = contextFileTokens(lastPrompt, snapshot.messages);
 	const skills = skillPromptTokens(lastPrompt);
 	const toolPrompt = toolPromptTokens(pi, lastPrompt);
 	const extras = promptExtrasTokens(lastPrompt);
@@ -696,8 +718,9 @@ function contentPreviewLines(content: string, maxLines = 12): string[] {
 function fileSections(
 	ctx: ExtensionCommandContext,
 	lastPrompt: PromptSnapshot | undefined,
+	messages: AgentMessage[] = [],
 ): Section[] {
-	const files = contextFiles(lastPrompt);
+	const files = contextFiles(lastPrompt, messages);
 	const agentsFiles = files.filter((file) =>
 		/(^|\/)AGENTS\.md$/.test(file.path),
 	);
@@ -763,12 +786,13 @@ function promptSections(
 	ctx: ExtensionCommandContext,
 	pi: ExtensionAPI,
 	lastPrompt: PromptSnapshot | undefined,
+	snapshot: ContextSnapshot,
 ): Section[] {
 	const prompt = lastPrompt?.systemPrompt ?? ctx.getSystemPrompt();
 	const options = lastPrompt?.options;
-	const files = contextFiles(lastPrompt);
+	const files = contextFiles(lastPrompt, snapshot.messages);
 	const skills = promptSkills(lastPrompt);
-	return [
+	const sections: Section[] = [
 		{
 			title: "System prompt components",
 			lines: [
@@ -779,7 +803,7 @@ function promptSections(
 				options?.customPrompt
 					? `custom prompt ${formatCount(estimateTextTokens(options.customPrompt))} tok`
 					: "default Pi prompt",
-				`${files.length} context file(s) · ~${formatCount(contextFileTokens(lastPrompt))} tok`,
+				`${files.length} context file(s) · ~${formatCount(contextFileTokens(lastPrompt, snapshot.messages))} tok`,
 				`${skills.length} skill(s) · ~${formatCount(skillPromptTokens(lastPrompt))} tok`,
 				`${activeToolInfos(pi).length} active tool prompt entries · ~${formatCount(toolPromptTokens(pi, lastPrompt))} tok`,
 				options?.appendSystemPrompt
@@ -796,6 +820,16 @@ function promptSections(
 			list: false,
 		},
 	];
+
+	if (lastPrompt?.providerPayloadText) {
+		sections.push({
+			title: `Final provider payload captured ${formatAge(lastPrompt.providerPayloadAt)}`,
+			lines: lastPrompt.providerPayloadText.split("\n"),
+			list: false,
+		});
+	}
+
+	return sections;
 }
 
 function buildTabs(
@@ -817,8 +851,8 @@ function buildTabs(
 		},
 		{
 			title: "Files",
-			badge: String(contextFiles(lastPrompt).length),
-			sections: fileSections(ctx, lastPrompt),
+			badge: String(contextFiles(lastPrompt, snapshot.messages).length),
+			sections: fileSections(ctx, lastPrompt, snapshot.messages),
 		},
 		{
 			title: "Skills",
@@ -833,7 +867,7 @@ function buildTabs(
 		{
 			title: "Prompt",
 			badge: `${formatCount(estimateTextTokens(lastPrompt?.systemPrompt ?? ctx.getSystemPrompt()))} tok`,
-			sections: promptSections(ctx, pi, lastPrompt),
+			sections: promptSections(ctx, pi, lastPrompt, snapshot),
 		},
 	];
 }
@@ -1085,7 +1119,7 @@ async function showContextViewer(
 			at: Date.now(),
 			prompt: "current system prompt",
 			systemPrompt: ctx.getSystemPrompt(),
-			options: { cwd: ctx.cwd },
+			options: ctx.getSystemPromptOptions?.() ?? { cwd: ctx.cwd },
 		} satisfies PromptSnapshot);
 	const tabs = buildTabs(ctx, pi, snapshot, promptSnapshot);
 	const tokenBadge = ctx.getContextUsage()?.tokens;
@@ -1165,6 +1199,18 @@ export default function contextViewerExtension(pi: ExtensionAPI) {
 				? { provider: ctx.model.provider, modelId: ctx.model.id }
 				: null,
 		};
+	});
+
+	pi.on("before_provider_request", (event, ctx) => {
+		if (!lastPrompt) return undefined;
+
+		lastPrompt = {
+			...lastPrompt,
+			systemPrompt: ctx.getSystemPrompt(),
+			providerPayloadAt: Date.now(),
+			providerPayloadText: jsonPrettyPreview(event.payload),
+		};
+		return undefined;
 	});
 
 	const command = {
