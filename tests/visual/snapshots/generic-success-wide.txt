@@ -1,0 +1,9 @@
+╭ Third Party Fixture  done  ──────────────────────────────────────────────────────────────╮
+│    ├─ value │ deterministic                                                              │
+│    ╰─ mode  │ success                                                                    │
+│                                                                                          │
+│                                                                                          │
+│  plugin progress                                                                         │
+│  final fixture result: deterministic                                                     │
+│                                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────╯

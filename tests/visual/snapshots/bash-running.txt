@@ -1,0 +1,10 @@
+╭  bash  running  ────────────────────────────────────────────────────────────╮
+│    ├─ command │ printf "bash started\n"; touch "$VISUAL_FIXTURE_READY";      │
+│    │            while [ ! -e "$VISUAL_FIXTURE_RELEASE" ]; do sleep 0.05;     │
+│    │            done; printf "bash completed\n"                              │
+│    ╰─ timeout │ 10s                                                          │
+│                                                                              │
+│                                                                              │
+│  bash started                                                                │
+│                                                                              │
+╰─  1 line   elapsed <duration>  ────────────────────────────────────────────────────╯

@@ -1,0 +1,9 @@
+╭ Third Party Fixture  running  ───────────────────────────────────────╮
+│    ├─ value │ waiting                                                │
+│    ╰─ mode  │ wait                                                   │
+│                                                                      │
+│                                                                      │
+│  plugin progress                                                     │
+│  partial fixture result                                              │
+│                                                                      │
+╰──────────────────────────────────────────────────────────────────────╯

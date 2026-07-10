@@ -10,9 +10,9 @@ import {
 	gruvbox,
 	StaticLines,
 	TerminalPane,
-	ToolShell,
+	ToolPresentation,
 	type BadgeSpec,
-	type ToolShellOptions,
+	type ToolPresentationModel,
 } from "../../components/index.ts";
 import {
 	countLines,
@@ -58,13 +58,13 @@ function compactPath(path: string): string {
 	return truncateToWidth(displayPath(path), 56, "…");
 }
 
-function buildBashShell(
+function buildBashPresentation(
 	args: BashToolInput,
 	info: ResultInfo<BashToolDetails | undefined> | undefined,
 	theme: Theme,
 	context: SkinRenderContext,
 	timingState?: SkinState<BashToolDetails | undefined>,
-): ToolShellOptions {
+): ToolPresentationModel {
 	const command = safeString(args.command);
 	const output =
 		textOutput(info?.result) || pendingText(context.executionStarted);
@@ -142,7 +142,7 @@ export default function registerBashTool(pi: ExtensionAPI) {
 	const originalBash = createBashToolDefinition(process.cwd());
 	pi.registerTool({
 		...originalBash,
-		renderShell: "self",
+		renderShell: "default",
 		renderCall(args, theme, context) {
 			const state = context.state as BashSkinState;
 			if (context.executionStarted && state.startedAt === undefined) {
@@ -177,12 +177,13 @@ export default function registerBashTool(pi: ExtensionAPI) {
 				stopElapsedTimer(state);
 			}
 
-			const shell = state.shell ?? new ToolShell({ title: "bash" });
-			state.shell = shell;
-			shell.setOptions(
-				buildBashShell(args, state.info, theme, context, state),
+			const presentation =
+				state.presentation ?? new ToolPresentation({ title: "bash" });
+			state.presentation = presentation;
+			presentation.setOptions(
+				buildBashPresentation(args, state.info, theme, context, state),
 			);
-			return shell;
+			return presentation;
 		},
 		renderResult(result, options, theme, context) {
 			const state = context.state as BashSkinState;
@@ -194,8 +195,14 @@ export default function registerBashTool(pi: ExtensionAPI) {
 				stopElapsedTimer(state);
 			}
 			state.info = { result, options, isError: context.isError };
-			state.shell?.setOptions(
-				buildBashShell(context.args, state.info, theme, context, state),
+			state.presentation?.setOptions(
+				buildBashPresentation(
+					context.args,
+					state.info,
+					theme,
+					context,
+					state,
+				),
 			);
 			return new StaticLines([]);
 		},

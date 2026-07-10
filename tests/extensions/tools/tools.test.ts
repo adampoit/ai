@@ -32,7 +32,7 @@ test("custom tools extension registers its public surface", () => {
 	assertPublicSurface(pi, { tools: toolNames });
 });
 
-test("custom tools extension keeps built-in tool wrappers self-rendering", () => {
+test("custom tools extension delegates framing to the global adapter", () => {
 	const pi = loadExtension(toolsExtension);
 
 	for (const toolName of toolNames) {
@@ -40,8 +40,8 @@ test("custom tools extension keeps built-in tool wrappers self-rendering", () =>
 		assert.ok(tool, `Expected ${toolName} to be registered`);
 		assert.equal(
 			tool.renderShell,
-			"self",
-			`Expected ${toolName} to self-render`,
+			"default",
+			`Expected ${toolName} to use global framing`,
 		);
 		assert.equal(typeof tool.renderCall, "function");
 		assert.equal(typeof tool.renderResult, "function");

@@ -1,0 +1,13 @@
+╭ Web Search  done  ───────────────────────────────────────────────────╮
+│    ├─ query    │ deterministic smoke test                            │
+│    ├─ provider │ brave                                               │
+│    ╰─ workflow │ none                                                │
+│                                                                      │
+│                                                                      │
+│  search "deterministic smoke test"                                   │
+│   0 sources                                                          │
+│   Error: Brave Search API key not found. Either:                     │
+│                                                                      │
+│   ... (3 more lines, 5 total, ctrl+o to expand)                      │
+│                                                                      │
+╰──────────────────────────────────────────────────────────────────────╯

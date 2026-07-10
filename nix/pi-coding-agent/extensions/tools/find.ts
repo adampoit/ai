@@ -8,9 +8,9 @@ import { createFindToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
 	gruvbox,
 	StaticLines,
-	ToolShell,
+	ToolPresentation,
 	type BadgeSpec,
-	type ToolShellOptions,
+	type ToolPresentationModel,
 } from "../../components/index.ts";
 import {
 	countListItems,
@@ -29,12 +29,12 @@ import {
 
 const COLLAPSED_FIND_ENTRIES = 22;
 
-function buildFindShell(
+function buildFindPresentation(
 	args: FindToolInput,
 	info: ResultInfo<FindToolDetails | undefined> | undefined,
 	theme: Theme,
 	context: SkinRenderContext,
-): ToolShellOptions {
+): ToolPresentationModel {
 	const output = textOutput(info?.result);
 	const details = info?.result.details;
 	const resultCount = countListItems(output);
@@ -118,23 +118,26 @@ export default function registerFindTool(pi: ExtensionAPI) {
 	const originalFind = createFindToolDefinition(process.cwd());
 	pi.registerTool({
 		...originalFind,
-		renderShell: "self",
+		renderShell: "default",
 		renderCall(args, theme, context) {
 			const state = context.state as SkinState<
 				FindToolDetails | undefined
 			>;
-			const shell = state.shell ?? new ToolShell({ title: "find" });
-			state.shell = shell;
-			shell.setOptions(buildFindShell(args, state.info, theme, context));
-			return shell;
+			const presentation =
+				state.presentation ?? new ToolPresentation({ title: "find" });
+			state.presentation = presentation;
+			presentation.setOptions(
+				buildFindPresentation(args, state.info, theme, context),
+			);
+			return presentation;
 		},
 		renderResult(result, options, theme, context) {
 			const state = context.state as SkinState<
 				FindToolDetails | undefined
 			>;
 			state.info = { result, options, isError: context.isError };
-			state.shell?.setOptions(
-				buildFindShell(context.args, state.info, theme, context),
+			state.presentation?.setOptions(
+				buildFindPresentation(context.args, state.info, theme, context),
 			);
 			return new StaticLines([]);
 		},

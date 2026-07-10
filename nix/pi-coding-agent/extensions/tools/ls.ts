@@ -8,9 +8,9 @@ import { createLsToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
 	gruvbox,
 	StaticLines,
-	ToolShell,
+	ToolPresentation,
 	type BadgeSpec,
-	type ToolShellOptions,
+	type ToolPresentationModel,
 } from "../../components/index.ts";
 import {
 	countListItems,
@@ -27,12 +27,12 @@ import {
 
 const COLLAPSED_LS_ENTRIES = 24;
 
-function buildLsShell(
+function buildLsPresentation(
 	args: LsToolInput,
 	info: ResultInfo<LsToolDetails | undefined> | undefined,
 	theme: Theme,
 	context: SkinRenderContext,
-): ToolShellOptions {
+): ToolPresentationModel {
 	const output = textOutput(info?.result);
 	const details = info?.result.details;
 	const entryCount = countListItems(output);
@@ -108,19 +108,22 @@ export default function registerLsTool(pi: ExtensionAPI) {
 	const originalLs = createLsToolDefinition(process.cwd());
 	pi.registerTool({
 		...originalLs,
-		renderShell: "self",
+		renderShell: "default",
 		renderCall(args, theme, context) {
 			const state = context.state as SkinState<LsToolDetails | undefined>;
-			const shell = state.shell ?? new ToolShell({ title: "ls" });
-			state.shell = shell;
-			shell.setOptions(buildLsShell(args, state.info, theme, context));
-			return shell;
+			const presentation =
+				state.presentation ?? new ToolPresentation({ title: "ls" });
+			state.presentation = presentation;
+			presentation.setOptions(
+				buildLsPresentation(args, state.info, theme, context),
+			);
+			return presentation;
 		},
 		renderResult(result, options, theme, context) {
 			const state = context.state as SkinState<LsToolDetails | undefined>;
 			state.info = { result, options, isError: context.isError };
-			state.shell?.setOptions(
-				buildLsShell(context.args, state.info, theme, context),
+			state.presentation?.setOptions(
+				buildLsPresentation(context.args, state.info, theme, context),
 			);
 			return new StaticLines([]);
 		},

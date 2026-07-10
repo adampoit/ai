@@ -4,9 +4,9 @@ import {
 	CodePane,
 	gruvbox,
 	StaticLines,
-	ToolShell,
+	ToolPresentation,
 	type BadgeSpec,
-	type ToolShellOptions,
+	type ToolPresentationModel,
 } from "../../components/index.ts";
 import {
 	countLines,
@@ -30,12 +30,12 @@ function formatBytes(bytes: number): string {
 	return `${mib.toFixed(mib >= 10 ? 0 : 1)} MiB`;
 }
 
-function buildWriteShell(
+function buildWritePresentation(
 	args: { path?: string; content?: string },
 	info: ResultInfo<undefined> | undefined,
 	theme: Theme,
 	context: SkinRenderContext,
-): ToolShellOptions {
+): ToolPresentationModel {
 	const path = safeString(args.path);
 	const content = safeString(args.content);
 	const lineCount = countLines(content);
@@ -97,19 +97,27 @@ export default function registerWriteTool(pi: ExtensionAPI) {
 	const originalWrite = createWriteToolDefinition(process.cwd());
 	pi.registerTool({
 		...originalWrite,
-		renderShell: "self",
+		renderShell: "default",
 		renderCall(args, theme, context) {
 			const state = context.state as SkinState<undefined>;
-			const shell = state.shell ?? new ToolShell({ title: "write" });
-			state.shell = shell;
-			shell.setOptions(buildWriteShell(args, state.info, theme, context));
-			return shell;
+			const presentation =
+				state.presentation ?? new ToolPresentation({ title: "write" });
+			state.presentation = presentation;
+			presentation.setOptions(
+				buildWritePresentation(args, state.info, theme, context),
+			);
+			return presentation;
 		},
 		renderResult(result, options, theme, context) {
 			const state = context.state as SkinState<undefined>;
 			state.info = { result, options, isError: context.isError };
-			state.shell?.setOptions(
-				buildWriteShell(context.args, state.info, theme, context),
+			state.presentation?.setOptions(
+				buildWritePresentation(
+					context.args,
+					state.info,
+					theme,
+					context,
+				),
 			);
 			return new StaticLines([]);
 		},

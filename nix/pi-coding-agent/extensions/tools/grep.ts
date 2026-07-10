@@ -8,9 +8,9 @@ import { createGrepToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
 	gruvbox,
 	StaticLines,
-	ToolShell,
+	ToolPresentation,
 	type BadgeSpec,
-	type ToolShellOptions,
+	type ToolPresentationModel,
 } from "../../components/index.ts";
 import {
 	displayPath,
@@ -27,12 +27,12 @@ import {
 
 const COLLAPSED_GREP_LINES = 18;
 
-function buildGrepShell(
+function buildGrepPresentation(
 	args: GrepToolInput,
 	info: ResultInfo<GrepToolDetails | undefined> | undefined,
 	theme: Theme,
 	context: SkinRenderContext,
-): ToolShellOptions {
+): ToolPresentationModel {
 	const output =
 		textOutput(info?.result) || pendingText(context.executionStarted);
 	const details = info?.result.details;
@@ -104,23 +104,26 @@ export default function registerGrepTool(pi: ExtensionAPI) {
 	const originalGrep = createGrepToolDefinition(process.cwd());
 	pi.registerTool({
 		...originalGrep,
-		renderShell: "self",
+		renderShell: "default",
 		renderCall(args, theme, context) {
 			const state = context.state as SkinState<
 				GrepToolDetails | undefined
 			>;
-			const shell = state.shell ?? new ToolShell({ title: "grep" });
-			state.shell = shell;
-			shell.setOptions(buildGrepShell(args, state.info, theme, context));
-			return shell;
+			const presentation =
+				state.presentation ?? new ToolPresentation({ title: "grep" });
+			state.presentation = presentation;
+			presentation.setOptions(
+				buildGrepPresentation(args, state.info, theme, context),
+			);
+			return presentation;
 		},
 		renderResult(result, options, theme, context) {
 			const state = context.state as SkinState<
 				GrepToolDetails | undefined
 			>;
 			state.info = { result, options, isError: context.isError };
-			state.shell?.setOptions(
-				buildGrepShell(context.args, state.info, theme, context),
+			state.presentation?.setOptions(
+				buildGrepPresentation(context.args, state.info, theme, context),
 			);
 			return new StaticLines([]);
 		},
