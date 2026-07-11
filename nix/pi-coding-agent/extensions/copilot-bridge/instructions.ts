@@ -5,6 +5,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
 	DefaultResourceLoader,
 	type ExtensionAPI,
+	VERSION,
 } from "@earendil-works/pi-coding-agent";
 import {
 	normalizeRelativePath,
@@ -27,6 +28,7 @@ const MAX_TOTAL_BYTES = 192 * 1024;
 const RESOURCE_LOADER_PATCH = Symbol.for(
 	"pi-copilot-bridge.resource-loader-patch",
 );
+const SUPPORTED_PI_VERSION_PREFIX = "0.80.";
 const PATH_INSTRUCTIONS_HEADER = "GitHub Copilot path-specific instructions";
 
 async function findInstructionFiles(dir: string): Promise<string[]> {
@@ -221,24 +223,55 @@ function renderInstructionFile(file: CopilotFile): string {
 }
 
 function patchResourceLoaderContextFiles() {
+	/*
+	 * COMPATIBILITY PATCH: Pi's extension API cannot register context files.
+	 * before_agent_start/context injection is insufficient because startup UI and
+	 * context viewers read DefaultResourceLoader before the first prompt. Pi's SDK
+	 * offers agentsFilesOverride only when constructing the loader, which an
+	 * extension cannot control. Keep this patch in sync with Pi 0.80.x's
+	 * DefaultResourceLoader#getAgentsFiles() contract and fail loudly if it changes.
+	 */
 	const prototype = DefaultResourceLoader.prototype as unknown as Record<
 		PropertyKey,
 		unknown
 	>;
 	if (prototype[RESOURCE_LOADER_PATCH]) return;
 
-	const original = prototype.getAgentsFiles as (this: unknown) => {
-		agentsFiles: Array<{ path: string; content: string }>;
-	};
+	if (!VERSION.startsWith(SUPPORTED_PI_VERSION_PREFIX)) {
+		console.warn(
+			`Copilot bridge resource-loader patch was written for Pi ${SUPPORTED_PI_VERSION_PREFIX}x; running ${VERSION}. Verifying compatibility at runtime.`,
+		);
+	}
+
+	const original = prototype.getAgentsFiles;
+	if (typeof original !== "function") {
+		throw new Error(
+			"Copilot bridge requires DefaultResourceLoader#getAgentsFiles(); Pi's resource-loader API is incompatible.",
+		);
+	}
+
 	prototype.getAgentsFiles = function patchedGetAgentsFiles(this: {
 		cwd?: string;
 	}) {
-		const result = original.call(this);
+		const result: unknown = original.call(this);
+		if (
+			!result ||
+			typeof result !== "object" ||
+			!Array.isArray((result as { agentsFiles?: unknown }).agentsFiles)
+		) {
+			throw new Error(
+				"Copilot bridge expected DefaultResourceLoader#getAgentsFiles() to return { agentsFiles: [] }; Pi's resource-loader API is incompatible.",
+			);
+		}
+
+		const typedResult = result as {
+			agentsFiles: Array<{ path: string; content: string }>;
+		};
 		const cwd = this.cwd ?? process.cwd();
 		const filePath = path.join(cwd, ".github", "copilot-instructions.md");
-		if (!existsSync(filePath)) return result;
-		if (result.agentsFiles.some((file) => file.path === filePath)) {
-			return result;
+		if (!existsSync(filePath)) return typedResult;
+		if (typedResult.agentsFiles.some((file) => file.path === filePath)) {
+			return typedResult;
 		}
 
 		const file = readCopilotFileSync(
@@ -248,7 +281,7 @@ function patchResourceLoaderContextFiles() {
 		);
 		return {
 			agentsFiles: [
-				...result.agentsFiles,
+				...typedResult.agentsFiles,
 				{ path: file.path, content: renderInstructionFile(file) },
 			],
 		};
