@@ -229,7 +229,8 @@ function patchResourceLoaderContextFiles() {
 	 * context viewers read DefaultResourceLoader before the first prompt. Pi's SDK
 	 * offers agentsFilesOverride only when constructing the loader, which an
 	 * extension cannot control. Keep this patch in sync with Pi 0.80.x's
-	 * DefaultResourceLoader#getAgentsFiles() contract and fail loudly if it changes.
+	 * DefaultResourceLoader#getAgentsFiles() contract. Compatibility failures warn
+	 * and fall back to Pi's unmodified result so context loading can still proceed.
 	 */
 	const prototype = DefaultResourceLoader.prototype as unknown as Record<
 		PropertyKey,
@@ -245,46 +246,62 @@ function patchResourceLoaderContextFiles() {
 
 	const original = prototype.getAgentsFiles;
 	if (typeof original !== "function") {
-		throw new Error(
-			"Copilot bridge requires DefaultResourceLoader#getAgentsFiles(); Pi's resource-loader API is incompatible.",
+		console.warn(
+			"Copilot bridge could not find DefaultResourceLoader#getAgentsFiles(); repository-wide Copilot instructions will not be added to startup context.",
 		);
+		return;
 	}
 
 	prototype.getAgentsFiles = function patchedGetAgentsFiles(this: {
 		cwd?: string;
 	}) {
 		const result: unknown = original.call(this);
-		if (
-			!result ||
-			typeof result !== "object" ||
-			!Array.isArray((result as { agentsFiles?: unknown }).agentsFiles)
-		) {
-			throw new Error(
-				"Copilot bridge expected DefaultResourceLoader#getAgentsFiles() to return { agentsFiles: [] }; Pi's resource-loader API is incompatible.",
+		try {
+			if (
+				!result ||
+				typeof result !== "object" ||
+				!Array.isArray(
+					(result as { agentsFiles?: unknown }).agentsFiles,
+				)
+			) {
+				throw new Error(
+					"expected getAgentsFiles() to return { agentsFiles: [] }",
+				);
+			}
+
+			const typedResult = result as {
+				agentsFiles: Array<{ path: string; content: string }>;
+			};
+			const cwd = this.cwd ?? process.cwd();
+			const filePath = path.join(
+				cwd,
+				".github",
+				"copilot-instructions.md",
 			);
-		}
+			if (!existsSync(filePath)) return typedResult;
+			if (
+				typedResult.agentsFiles.some((file) => file.path === filePath)
+			) {
+				return typedResult;
+			}
 
-		const typedResult = result as {
-			agentsFiles: Array<{ path: string; content: string }>;
-		};
-		const cwd = this.cwd ?? process.cwd();
-		const filePath = path.join(cwd, ".github", "copilot-instructions.md");
-		if (!existsSync(filePath)) return typedResult;
-		if (typedResult.agentsFiles.some((file) => file.path === filePath)) {
-			return typedResult;
+			const file = readCopilotFileSync(
+				cwd,
+				filePath,
+				"repository instructions",
+			);
+			return {
+				agentsFiles: [
+					...typedResult.agentsFiles,
+					{ path: file.path, content: renderInstructionFile(file) },
+				],
+			};
+		} catch (error) {
+			console.warn(
+				`Copilot bridge could not augment Pi context files; using the unmodified resource-loader result: ${error instanceof Error ? error.message : String(error)}`,
+			);
+			return result;
 		}
-
-		const file = readCopilotFileSync(
-			cwd,
-			filePath,
-			"repository instructions",
-		);
-		return {
-			agentsFiles: [
-				...typedResult.agentsFiles,
-				{ path: file.path, content: renderInstructionFile(file) },
-			],
-		};
 	};
 	prototype[RESOURCE_LOADER_PATCH] = true;
 }
