@@ -70,10 +70,12 @@ export type TestExtensionContext = {
 		contextWindow: number;
 	};
 	getSystemPrompt: () => string;
+	getSystemPromptOptions: () => unknown;
 	navigateTree: (
 		entryId: string,
 		options: unknown,
 	) => Promise<{ cancelled: boolean }>;
+	isProjectTrusted: () => boolean;
 	ui: {
 		theme: { fg: (_token: string, text: string) => string };
 		setStatus: (key: string, value?: string) => void;
@@ -105,6 +107,8 @@ export class FakePi {
 	readonly execCalls: ExecCall[] = [];
 	readonly selectedModels: unknown[] = [];
 	readonly selectedThinkingLevels: string[] = [];
+	readonly sentMessages: unknown[] = [];
+	readonly sentUserMessages: unknown[] = [];
 	thinkingLevel = "off";
 
 	registerTool(tool: RegisteredTool) {
@@ -131,7 +135,26 @@ export class FakePi {
 	async emit(eventName: string, event: unknown, ctx: TestExtensionContext) {
 		const results = [];
 		for (const handler of this.handlers.get(eventName) ?? []) {
-			results.push(await handler(event, ctx));
+			const result = await handler(event, ctx);
+			results.push(result);
+			if (
+				result &&
+				typeof result === "object" &&
+				event &&
+				typeof event === "object"
+			) {
+				if (
+					"systemPrompt" in result &&
+					typeof result.systemPrompt === "string"
+				) {
+					(event as { systemPrompt?: string }).systemPrompt =
+						result.systemPrompt;
+				}
+				if ("messages" in result && Array.isArray(result.messages)) {
+					(event as { messages?: unknown[] }).messages =
+						result.messages;
+				}
+			}
 		}
 		return results;
 	}
@@ -167,6 +190,14 @@ export class FakePi {
 	async setModel(model: unknown) {
 		this.selectedModels.push(model);
 		return true;
+	}
+
+	sendMessage(message: unknown, options?: unknown) {
+		this.sentMessages.push({ message, options });
+	}
+
+	sendUserMessage(content: unknown, options?: unknown) {
+		this.sentUserMessages.push({ content, options });
 	}
 }
 
@@ -215,7 +246,9 @@ export async function createContext(
 			contextWindow: 200_000,
 		}),
 		getSystemPrompt: () => "You are a test agent.",
+		getSystemPromptOptions: () => ({ cwd }),
 		navigateTree: async () => ({ cancelled: false }),
+		isProjectTrusted: () => true,
 		ui: {
 			theme: { fg: (_token, text) => text },
 			setStatus: (key, value) => statuses.push([key, value]),
