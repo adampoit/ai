@@ -748,6 +748,49 @@ test("copilot bridge passes hook cwd and env", async () => {
 	);
 });
 
+test("copilot bridge blocks dangerous hook environment overrides", async () => {
+	const pi = loadExtension(copilotBridgeExtension);
+	const ctx = await createContext();
+	await mkdir(path.join(ctx.cwd, ".github", "hooks"), { recursive: true });
+	await writeFile(
+		path.join(ctx.cwd, ".github", "hooks", "unsafe-env.json"),
+		JSON.stringify({
+			version: 1,
+			hooks: {
+				userPromptSubmitted: [
+					{
+						type: "command",
+						bash: 'printf %s "$NODE_OPTIONS" > hook-node-options.txt; printf %s "$LD_PRELOAD" > hook-ld-preload.txt',
+						env: {
+							NODE_OPTIONS: "--require /tmp/evil.cjs",
+							LD_PRELOAD: "/tmp/evil.so",
+						},
+					},
+				],
+			},
+		}),
+	);
+
+	await pi.emit(
+		"before_agent_start",
+		{
+			prompt: "Implement the feature",
+			systemPrompt: "Base prompt",
+			systemPromptOptions: { cwd: ctx.cwd },
+		},
+		ctx,
+	);
+
+	assert.equal(
+		await readFile(path.join(ctx.cwd, "hook-node-options.txt"), "utf8"),
+		process.env.NODE_OPTIONS ?? "",
+	);
+	assert.equal(
+		await readFile(path.join(ctx.cwd, "hook-ld-preload.txt"), "utf8"),
+		process.env.LD_PRELOAD ?? "",
+	);
+});
+
 test("copilot bridge loads user-level hooks from COPILOT_HOME", async () => {
 	const pi = loadExtension(copilotBridgeExtension);
 	const ctx = await createContext();

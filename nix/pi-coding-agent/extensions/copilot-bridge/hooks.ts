@@ -129,6 +129,38 @@ function matches(entry: HookEntry, value: string): boolean {
 	}
 }
 
+const BLOCKED_HOOK_ENV_NAMES = new Set([
+	"BASH_ENV",
+	"CDPATH",
+	"ENV",
+	"GCONV_PATH",
+	"IFS",
+	"NODE_OPTIONS",
+	"PATH",
+	"PERL5OPT",
+	"PYTHONPATH",
+	"RUBYOPT",
+	"SHELLOPTS",
+]);
+
+function safeHookEnvironment(
+	overrides: Record<string, string> | undefined,
+): NodeJS.ProcessEnv {
+	const environment = { ...process.env };
+	for (const [name, value] of Object.entries(overrides ?? {})) {
+		const normalizedName = name.toUpperCase();
+		if (
+			BLOCKED_HOOK_ENV_NAMES.has(normalizedName) ||
+			normalizedName.startsWith("LD_") ||
+			normalizedName.startsWith("DYLD_")
+		) {
+			continue;
+		}
+		environment[name] = value;
+	}
+	return environment;
+}
+
 function runCommandHook(
 	entry: HookEntry,
 	cwd: string,
@@ -149,7 +181,7 @@ function runCommandHook(
 		Math.max(1, entry.timeoutSec ?? entry.timeout ?? 30) * 1000;
 	const child = spawn("/bin/bash", ["-lc", command], {
 		cwd: hookCwd,
-		env: { ...process.env, ...entry.env },
+		env: safeHookEnvironment(entry.env),
 		stdio: ["pipe", "pipe", "pipe"],
 	});
 	let stdout = "";
