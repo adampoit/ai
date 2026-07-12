@@ -1,4 +1,4 @@
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { parseFrontmatter } from "./shared.ts";
@@ -11,7 +11,25 @@ type CopilotPrompt = {
 	content: string;
 };
 
-async function findPromptFiles(dir: string): Promise<string[]> {
+type PromptFile = {
+	path: string;
+	realPath: string;
+};
+
+function isWithinDirectory(directory: string, filePath: string): boolean {
+	const relativePath = path.relative(directory, filePath);
+	return (
+		relativePath !== "" &&
+		!relativePath.startsWith(`..${path.sep}`) &&
+		relativePath !== ".." &&
+		!path.isAbsolute(relativePath)
+	);
+}
+
+async function findPromptFiles(
+	dir: string,
+	promptRoot: string,
+): Promise<PromptFile[]> {
 	let entries;
 	try {
 		entries = await readdir(dir, { withFileTypes: true });
@@ -19,25 +37,45 @@ async function findPromptFiles(dir: string): Promise<string[]> {
 		return [];
 	}
 
-	const files: string[] = [];
+	const files: PromptFile[] = [];
 	for (const entry of entries) {
 		const entryPath = path.join(dir, entry.name);
-		if (entry.isDirectory())
-			files.push(...(await findPromptFiles(entryPath)));
-		else if (entry.isFile() && entry.name.endsWith(".prompt.md")) {
-			files.push(entryPath);
+		if (entry.isDirectory()) {
+			files.push(...(await findPromptFiles(entryPath, promptRoot)));
+		} else if (
+			(entry.isFile() || entry.isSymbolicLink()) &&
+			entry.name.endsWith(".prompt.md")
+		) {
+			try {
+				const realPath = await realpath(entryPath);
+				const target = await stat(realPath);
+				if (
+					target.isFile() &&
+					isWithinDirectory(promptRoot, realPath)
+				) {
+					files.push({ path: entryPath, realPath });
+				}
+			} catch {
+				// Ignore files that disappear or cannot be resolved during discovery.
+			}
 		}
 	}
-	return files.sort();
+	return files.sort((left, right) => left.path.localeCompare(right.path));
 }
 
 async function discoverPrompts(cwd: string): Promise<CopilotPrompt[]> {
 	const promptDir = path.join(cwd, ".github", "prompts");
-	const files = await findPromptFiles(promptDir);
+	let promptRoot: string;
+	try {
+		promptRoot = await realpath(promptDir);
+	} catch {
+		return [];
+	}
+	const files = await findPromptFiles(promptDir, promptRoot);
 
 	return Promise.all(
-		files.map(async (filePath) => {
-			const raw = await readFile(filePath, "utf8");
+		files.map(async ({ path: filePath, realPath }) => {
+			const raw = await readFile(realPath, "utf8");
 			const { metadata, body } = parseFrontmatter(raw);
 			const relativePath = path.relative(cwd, filePath);
 			const name = path

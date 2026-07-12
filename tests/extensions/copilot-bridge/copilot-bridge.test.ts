@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -307,6 +307,23 @@ test("copilot bridge loads Copilot prompt files into the editor", async () => {
 			message: "Loaded .github/prompts/review.prompt.md into the editor.",
 			level: "info",
 		},
+	]);
+});
+
+test("copilot bridge rejects prompt symlinks outside the prompts directory", async () => {
+	const pi = loadExtension(copilotBridgeExtension);
+	const ctx = await createContext();
+	const promptDir = path.join(ctx.cwd, ".github", "prompts");
+	const outsideFile = path.join(ctx.cwd, "secret.prompt.md");
+	await mkdir(promptDir, { recursive: true });
+	await writeFile(outsideFile, "Sensitive content");
+	await symlink(outsideFile, path.join(promptDir, "leak.prompt.md"));
+
+	await runCommand(pi, "copilot-prompt", "leak", ctx);
+
+	assert.equal(ctx.editorText, undefined);
+	assert.deepEqual(ctx.notifications, [
+		{ message: "Copilot prompt not found: leak", level: "error" },
 	]);
 });
 
