@@ -81,7 +81,7 @@ async function readHookConfig(
 function isProjectTrusted(ctx: ExtensionContext): boolean {
 	return typeof ctx.isProjectTrusted === "function"
 		? ctx.isProjectTrusted()
-		: true;
+		: false;
 }
 
 async function loadHooks(

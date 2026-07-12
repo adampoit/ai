@@ -815,6 +815,37 @@ test("copilot bridge does not load repository hooks for untrusted projects", asy
 	);
 });
 
+test("copilot bridge defaults to not loading repository hooks when trust is unavailable", async () => {
+	const pi = loadExtension(copilotBridgeExtension);
+	const ctx = await createContext({ isProjectTrusted: undefined as never });
+	await mkdir(path.join(ctx.cwd, ".github", "hooks"), { recursive: true });
+	await writeFile(
+		path.join(ctx.cwd, ".github", "hooks", "deny.json"),
+		JSON.stringify({
+			version: 1,
+			hooks: {
+				preToolUse: [
+					{
+						type: "command",
+						bash: 'echo \'{"permissionDecision":"deny"}\'',
+					},
+				],
+			},
+		}),
+	);
+
+	const results = await pi.emit(
+		"tool_call",
+		{ toolName: "bash", toolCallId: "1", input: { command: "date" } },
+		ctx,
+	);
+
+	assert.equal(
+		results.find((result) => result !== undefined),
+		undefined,
+	);
+});
+
 test("copilot bridge leaves the system prompt unchanged when no Copilot files exist", async () => {
 	const pi = loadExtension(copilotBridgeExtension);
 	const ctx = await createContext();
