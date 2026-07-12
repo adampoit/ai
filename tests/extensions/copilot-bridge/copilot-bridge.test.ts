@@ -3,7 +3,10 @@ import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { DefaultResourceLoader } from "@earendil-works/pi-coding-agent";
+import {
+	DefaultResourceLoader,
+	SettingsManager,
+} from "@earendil-works/pi-coding-agent";
 import copilotBridgeExtension from "../../../nix/pi-coding-agent/extensions/copilot-bridge/index.ts";
 import contextViewerExtension from "../../../nix/pi-coding-agent/extensions/context-viewer.ts";
 import {
@@ -77,6 +80,62 @@ test("copilot bridge contributes repository-wide Copilot instructions as project
 		JSON.stringify(files).includes("typescript.instructions.md"),
 		false,
 	);
+});
+
+test("copilot bridge excludes repository instructions from untrusted startup context", async () => {
+	loadExtension(copilotBridgeExtension);
+	const ctx = await createContext();
+	await mkdir(path.join(ctx.cwd, ".github"), { recursive: true });
+	await writeFile(
+		path.join(ctx.cwd, ".github", "copilot-instructions.md"),
+		"Untrusted guidance.",
+	);
+	const settingsManager = SettingsManager.inMemory();
+	settingsManager.setProjectTrusted(false);
+	const loader = new DefaultResourceLoader({
+		cwd: ctx.cwd,
+		agentDir: ctx.cwd,
+		settingsManager,
+		noExtensions: true,
+	});
+	await loader.reload();
+
+	assert.equal(loader.getAgentsFiles().agentsFiles.length, 0);
+});
+
+test("copilot bridge rejects instruction symlinks outside the instructions directory", async () => {
+	const pi = loadExtension(copilotBridgeExtension);
+	const ctx = await createContext();
+	const instructionDir = path.join(ctx.cwd, ".github", "instructions");
+	const outsideFile = path.join(ctx.cwd, "secret.instructions.md");
+	await mkdir(instructionDir, { recursive: true });
+	await writeFile(outsideFile, "Sensitive content");
+	await symlink(
+		outsideFile,
+		path.join(instructionDir, "leak.instructions.md"),
+	);
+
+	await runCommand(pi, "copilot-bridge", "", ctx);
+
+	assert.deepEqual(ctx.notifications, [
+		{ message: "No Copilot instruction files found.", level: "info" },
+	]);
+});
+
+test("copilot bridge skips repository instructions when the project is untrusted", async () => {
+	const pi = loadExtension(copilotBridgeExtension);
+	const ctx = await createContext({ isProjectTrusted: () => false });
+	await mkdir(path.join(ctx.cwd, ".github"), { recursive: true });
+	await writeFile(
+		path.join(ctx.cwd, ".github", "copilot-instructions.md"),
+		"Untrusted guidance.",
+	);
+
+	await runCommand(pi, "copilot-bridge", "", ctx);
+
+	assert.deepEqual(ctx.notifications, [
+		{ message: "No Copilot instruction files found.", level: "info" },
+	]);
 });
 
 test("context viewer shows both AGENTS.md and Copilot instructions", async () => {

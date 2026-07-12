@@ -1,7 +1,7 @@
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { parseFrontmatter } from "./shared.ts";
+import { isWithinDirectory, parseFrontmatter } from "./shared.ts";
 
 type CopilotPrompt = {
 	name: string;
@@ -15,16 +15,6 @@ type PromptFile = {
 	path: string;
 	realPath: string;
 };
-
-function isWithinDirectory(directory: string, filePath: string): boolean {
-	const relativePath = path.relative(directory, filePath);
-	return (
-		relativePath !== "" &&
-		!relativePath.startsWith(`..${path.sep}`) &&
-		relativePath !== ".." &&
-		!path.isAbsolute(relativePath)
-	);
-}
 
 async function findPromptFiles(
 	dir: string,
@@ -67,7 +57,7 @@ async function discoverPrompts(cwd: string): Promise<CopilotPrompt[]> {
 	const promptDir = path.join(cwd, ".github", "prompts");
 	let promptRoot: string;
 	try {
-		promptRoot = await realpath(promptDir);
+		promptRoot = path.join(await realpath(cwd), ".github", "prompts");
 	} catch {
 		return [];
 	}

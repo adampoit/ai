@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
-import { readdir, readFile } from "node:fs/promises";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
@@ -8,6 +8,7 @@ import {
 	VERSION,
 } from "@earendil-works/pi-coding-agent";
 import {
+	isWithinDirectory,
 	normalizeRelativePath,
 	parseFrontmatter,
 	pathExists,
@@ -31,7 +32,15 @@ const RESOURCE_LOADER_PATCH = Symbol.for(
 const SUPPORTED_PI_VERSION_PREFIX = "0.80.";
 const PATH_INSTRUCTIONS_HEADER = "GitHub Copilot path-specific instructions";
 
-async function findInstructionFiles(dir: string): Promise<string[]> {
+type InstructionFile = {
+	path: string;
+	realPath: string;
+};
+
+async function findInstructionFiles(
+	dir: string,
+	instructionRoot: string,
+): Promise<InstructionFile[]> {
 	let entries;
 	try {
 		entries = await readdir(dir, { withFileTypes: true });
@@ -39,16 +48,32 @@ async function findInstructionFiles(dir: string): Promise<string[]> {
 		return [];
 	}
 
-	const files: string[] = [];
+	const files: InstructionFile[] = [];
 	for (const entry of entries) {
 		const entryPath = path.join(dir, entry.name);
-		if (entry.isDirectory())
-			files.push(...(await findInstructionFiles(entryPath)));
-		else if (entry.isFile() && entry.name.endsWith(".instructions.md")) {
-			files.push(entryPath);
+		if (entry.isDirectory()) {
+			files.push(
+				...(await findInstructionFiles(entryPath, instructionRoot)),
+			);
+		} else if (
+			(entry.isFile() || entry.isSymbolicLink()) &&
+			entry.name.endsWith(".instructions.md")
+		) {
+			try {
+				const realPath = await realpath(entryPath);
+				const target = await stat(realPath);
+				if (
+					target.isFile() &&
+					isWithinDirectory(instructionRoot, realPath)
+				) {
+					files.push({ path: entryPath, realPath });
+				}
+			} catch {
+				// Ignore files that disappear or cannot be resolved during discovery.
+			}
 		}
 	}
-	return files.sort();
+	return files.sort((left, right) => left.path.localeCompare(right.path));
 }
 
 function copilotFileFromContent(
@@ -100,25 +125,52 @@ async function readCopilotFile(
 	);
 }
 
-async function discoverCopilotFiles(cwd: string): Promise<CopilotFile[]> {
+async function discoverCopilotFiles(
+	cwd: string,
+	projectTrusted: boolean,
+): Promise<CopilotFile[]> {
+	if (!projectTrusted) return [];
+
 	const githubDir = path.join(cwd, ".github");
+	const canonicalCwd = await realpath(cwd);
+	const canonicalGithubDir = path.join(canonicalCwd, ".github");
+	const instructionRoot = path.join(canonicalGithubDir, "instructions");
 	const files: CopilotFile[] = [];
 	const rootInstructions = path.join(githubDir, "copilot-instructions.md");
 
 	if (await pathExists(rootInstructions)) {
-		files.push(
-			await readCopilotFile(
-				cwd,
-				rootInstructions,
-				"repository instructions",
-			),
-		);
+		try {
+			const realPath = await realpath(rootInstructions);
+			const target = await stat(realPath);
+			if (
+				target.isFile() &&
+				isWithinDirectory(canonicalGithubDir, realPath)
+			) {
+				const file = await readCopilotFile(
+					cwd,
+					realPath,
+					"repository instructions",
+				);
+				file.path = rootInstructions;
+				file.relativePath = path.relative(cwd, rootInstructions);
+				files.push(file);
+			}
+		} catch {
+			// Ignore files that disappear or cannot be resolved during discovery.
+		}
 	}
 
-	for (const filePath of await findInstructionFiles(
+	for (const instructionFile of await findInstructionFiles(
 		path.join(githubDir, "instructions"),
+		instructionRoot,
 	)) {
-		const file = await readCopilotFile(cwd, filePath, "path instructions");
+		const file = await readCopilotFile(
+			cwd,
+			instructionFile.realPath,
+			"path instructions",
+		);
+		file.path = instructionFile.path;
+		file.relativePath = path.relative(cwd, instructionFile.path);
 		if (file.excludeAgent !== "cloud-agent") files.push(file);
 	}
 
@@ -254,6 +306,7 @@ function patchResourceLoaderContextFiles() {
 
 	prototype.getAgentsFiles = function patchedGetAgentsFiles(this: {
 		cwd?: string;
+		settingsManager?: { isProjectTrusted?: () => boolean };
 	}) {
 		const result: unknown = original.call(this);
 		try {
@@ -272,6 +325,13 @@ function patchResourceLoaderContextFiles() {
 			const typedResult = result as {
 				agentsFiles: Array<{ path: string; content: string }>;
 			};
+			if (
+				typeof this.settingsManager?.isProjectTrusted !== "function" ||
+				!this.settingsManager.isProjectTrusted()
+			) {
+				return typedResult;
+			}
+
 			const cwd = this.cwd ?? process.cwd();
 			const filePath = path.join(
 				cwd,
@@ -279,6 +339,14 @@ function patchResourceLoaderContextFiles() {
 				"copilot-instructions.md",
 			);
 			if (!existsSync(filePath)) return typedResult;
+			const realPath = realpathSync(filePath);
+			const canonicalGithubDir = path.join(realpathSync(cwd), ".github");
+			if (
+				!statSync(realPath).isFile() ||
+				!isWithinDirectory(canonicalGithubDir, realPath)
+			) {
+				return typedResult;
+			}
 			if (
 				typedResult.agentsFiles.some((file) => file.path === filePath)
 			) {
@@ -287,9 +355,11 @@ function patchResourceLoaderContextFiles() {
 
 			const file = readCopilotFileSync(
 				cwd,
-				filePath,
+				realPath,
 				"repository instructions",
 			);
+			file.path = filePath;
+			file.relativePath = path.relative(cwd, filePath);
 			return {
 				agentsFiles: [
 					...typedResult.agentsFiles,
@@ -347,7 +417,10 @@ export function registerInstructionBridge(pi: ExtensionAPI) {
 		description:
 			"Show GitHub Copilot bridge files discovered in this repository",
 		async handler(_args, ctx) {
-			const files = await discoverCopilotFiles(ctx.cwd);
+			const files = await discoverCopilotFiles(
+				ctx.cwd,
+				ctx.isProjectTrusted(),
+			);
 			if (files.length === 0) {
 				ctx.ui.notify("No Copilot instruction files found.", "info");
 				return;
@@ -372,7 +445,10 @@ export function registerInstructionBridge(pi: ExtensionAPI) {
 	pi.on("context", async (event, ctx) => {
 		if (activePaths.size === 0) return undefined;
 
-		const files = await discoverCopilotFiles(ctx.cwd);
+		const files = await discoverCopilotFiles(
+			ctx.cwd,
+			ctx.isProjectTrusted(),
+		);
 		const pathInstructions = files.filter(
 			(file) =>
 				file.kind === "path instructions" &&

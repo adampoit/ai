@@ -38,6 +38,19 @@ export async function pathExists(filePath: string): Promise<boolean> {
 	}
 }
 
+export function isWithinDirectory(
+	directory: string,
+	filePath: string,
+): boolean {
+	const relativePath = path.relative(directory, filePath);
+	return (
+		relativePath !== "" &&
+		!relativePath.startsWith(`..${path.sep}`) &&
+		relativePath !== ".." &&
+		!path.isAbsolute(relativePath)
+	);
+}
+
 export function normalizeRelativePath(cwd: string, filePath: string): string {
 	const absolute = path.isAbsolute(filePath)
 		? filePath
