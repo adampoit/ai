@@ -619,6 +619,41 @@ test("copilot bridge fails closed for preToolUse command errors", async () => {
 	);
 });
 
+test("copilot bridge handles hook spawn errors without crashing", async () => {
+	const pi = loadExtension(copilotBridgeExtension);
+	const ctx = await createContext();
+	await mkdir(path.join(ctx.cwd, ".github", "hooks"), { recursive: true });
+	await writeFile(
+		path.join(ctx.cwd, ".github", "hooks", "spawn-error.json"),
+		JSON.stringify({
+			version: 1,
+			hooks: {
+				preToolUse: [
+					{
+						type: "command",
+						bash: "exit 0",
+						cwd: "missing-directory",
+					},
+				],
+			},
+		}),
+	);
+
+	const results = await pi.emit(
+		"tool_call",
+		{ toolName: "bash", toolCallId: "1", input: { command: "date" } },
+		ctx,
+	);
+
+	assert.deepEqual(
+		results.find((result) => result !== undefined),
+		{
+			block: true,
+			reason: "Denied by preToolUse hook (hook errored)",
+		},
+	);
+});
+
 test("copilot bridge fails open for preToolUse timeouts", async () => {
 	const pi = loadExtension(copilotBridgeExtension);
 	const ctx = await createContext();

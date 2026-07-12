@@ -187,11 +187,18 @@ function runCommandHook(
 	let stdout = "";
 	let stderr = "";
 	let timedOut = false;
+	let spawnError: Error | undefined;
 	const timer = setTimeout(() => {
 		timedOut = true;
 		child.kill("SIGTERM");
 	}, timeoutMs);
 
+	child.on("error", (error) => {
+		spawnError = error;
+	});
+	child.stdin.on("error", (error) => {
+		stderr += error.message;
+	});
 	child.stdin.end(JSON.stringify(payload));
 	child.stdout.on("data", (chunk) => {
 		stdout += String(chunk);
@@ -203,7 +210,12 @@ function runCommandHook(
 	return new Promise((resolve) => {
 		child.on("close", (code) => {
 			clearTimeout(timer);
-			resolve({ code, stdout, stderr, timedOut });
+			resolve({
+				code,
+				stdout,
+				stderr: spawnError?.message ?? stderr,
+				timedOut,
+			});
 		});
 	});
 }
