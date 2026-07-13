@@ -20,6 +20,7 @@ export type UsageWindow = {
 	remaining?: number;
 	percentRemaining?: number;
 	resetAt?: string;
+	durationMs?: number;
 	unlimited?: boolean;
 	/** Dollar cost, e.g. AI credits ÷ 100 */
 	cost?: number;
@@ -32,29 +33,22 @@ export type ProviderUsage = {
 	windows?: UsageWindow[];
 };
 
-type QuotaStatus = "ok" | "warn" | "error";
+export type QuotaStatus = "ok" | "warn" | "error";
 
 // ── shared quota helpers ──────────────────────────────────────────────
 
-export function quotaLabel(label: string): string {
-	const normalized = label.toLowerCase();
-	if (normalized === "primary" || normalized.includes("5h")) return "5h";
-	if (normalized === "secondary" || normalized.includes("week")) return "wk";
-	if (normalized.includes("month")) return "mo";
-	if (normalized.includes("premium")) return "req";
-	if (normalized.includes("credit")) return "cr";
-	return label;
-}
-
-function quotaDurationMs(
-	provider: string,
-	window: UsageWindow,
-): number | undefined {
-	const label = quotaLabel(window.label);
-	if (label === "5h") return 5 * 60 * 60 * 1000;
-	if (label === "wk") return 7 * 24 * 60 * 60 * 1000;
-	if (label === "mo" || provider === "GitHub Copilot")
-		return 30 * 24 * 60 * 60 * 1000;
+function quotaDurationMs(window: UsageWindow): number | undefined {
+	if (
+		window.durationMs !== undefined &&
+		Number.isFinite(window.durationMs) &&
+		window.durationMs > 0
+	) {
+		return window.durationMs;
+	}
+	const label = window.label.toLowerCase();
+	if (label.includes("5h")) return 5 * 60 * 60 * 1000;
+	if (label.includes("week")) return 7 * 24 * 60 * 60 * 1000;
+	if (label.includes("month")) return 30 * 24 * 60 * 60 * 1000;
 }
 
 export function resetEta(window: UsageWindow): string | undefined {
@@ -69,13 +63,13 @@ export function resetEta(window: UsageWindow): string | undefined {
 }
 
 export function quotaPace(
-	provider: string,
+	_provider: string,
 	window: UsageWindow,
 ): number | undefined {
 	if (window.remaining !== undefined && window.remaining < 0) return Infinity;
 	if (window.percentRemaining === undefined || !window.resetAt)
 		return undefined;
-	const duration = quotaDurationMs(provider, window);
+	const duration = quotaDurationMs(window);
 	if (!duration) return undefined;
 	const remainingMs = Math.max(
 		0,
@@ -96,8 +90,25 @@ export function paceColor(pace: number | undefined): QuotaStatus {
 	return "ok";
 }
 
+export function quotaWindowStatus(
+	provider: string,
+	window: UsageWindow,
+): QuotaStatus {
+	if (window.unlimited) return "ok";
+	const pace = quotaPace(provider, window);
+	if (pace !== undefined) return paceColor(pace);
+	if (window.percentRemaining !== undefined) {
+		if (window.percentRemaining <= 10) return "error";
+		if (window.percentRemaining <= 25) return "warn";
+	}
+	return "ok";
+}
+
 function burnRateWindows(windows: UsageWindow[]): UsageWindow[] {
-	return windows.filter((window) => quotaLabel(window.label) !== "5h");
+	return windows.filter(
+		(window) =>
+			!window.unlimited && quotaDurationMs(window) !== 5 * 60 * 60 * 1000,
+	);
 }
 
 export function limitingWindow(
@@ -185,13 +196,6 @@ function formatCurrency(value: number): string {
 	if (value === 0) return "$0.00";
 	if (value < 0.01) return `$${value.toFixed(4)}`;
 	return `$${value.toFixed(2)}`;
-}
-
-function formatReset(value: string | undefined): string {
-	if (!value) return "";
-	const date = new Date(value);
-	if (Number.isNaN(date.getTime())) return `, resets ${value}`;
-	return `, resets ${date.toLocaleString()}`;
 }
 
 function configPathCandidates(): string[] {
@@ -389,6 +393,11 @@ function openAiWindow(label: string, value: unknown): UsageWindow | undefined {
 							Date.now() + value.reset_after_seconds * 1000,
 						).toISOString()
 					: undefined;
+	const durationMs =
+		typeof value.limit_window_seconds === "number" &&
+		value.limit_window_seconds > 0
+			? value.limit_window_seconds * 1000
+			: undefined;
 	const percentRemaining =
 		typeof value.used_percent === "number"
 			? 100 - value.used_percent
@@ -402,6 +411,7 @@ function openAiWindow(label: string, value: unknown): UsageWindow | undefined {
 		remaining,
 		percentRemaining: clampPercent(percentRemaining),
 		resetAt,
+		durationMs,
 	};
 }
 
@@ -781,8 +791,6 @@ function copilotAiCreditsWindow(data: unknown): UsageWindow | undefined {
 				: typeof obj.quota_reset_date_utc === "string"
 					? obj.quota_reset_date_utc
 					: undefined;
-	const unlimited =
-		typeof obj.unlimited === "boolean" ? obj.unlimited : undefined;
 	const explicitPercent =
 		typeof obj.percent_remaining === "number"
 			? obj.percent_remaining
@@ -807,7 +815,6 @@ function copilotAiCreditsWindow(data: unknown): UsageWindow | undefined {
 			: undefined);
 
 	if (
-		!unlimited &&
 		resolvedTotal === undefined &&
 		resolvedUsed === undefined &&
 		remaining === undefined
@@ -822,7 +829,7 @@ function copilotAiCreditsWindow(data: unknown): UsageWindow | undefined {
 		remaining,
 		percentRemaining: clampPercent(percentRemaining),
 		resetAt,
-		unlimited,
+		unlimited: true,
 		cost: resolvedUsed !== undefined ? resolvedUsed / 100 : undefined,
 	};
 }
@@ -939,7 +946,8 @@ export async function copilotUsage(
 			: undefined);
 
 	if (
-		!unlimited &&
+		unlimited !== true &&
+		tokenBasedBilling !== true &&
 		resolvedTotal === undefined &&
 		resolvedUsed === undefined &&
 		remaining === undefined
@@ -974,7 +982,7 @@ export async function copilotUsage(
 			remaining,
 			percentRemaining: clampPercent(percentRemaining),
 			resetAt,
-			unlimited,
+			unlimited: unlimited === true || tokenBasedBilling === true,
 		});
 	}
 	return {
@@ -985,23 +993,23 @@ export async function copilotUsage(
 }
 
 function windowParts(window: UsageWindow): string[] {
-	// For unlimited business/enterprise plans GitHub reports entitlement:0,
-	// remaining:0 — rendering "0/0 used" is meaningless, so suppress it.
-	const zeroCapUnlimited =
-		window.unlimited && window.total === 0 && window.remaining === 0;
+	if (window.unlimited) {
+		return [
+			window.label.toLowerCase().includes("credit")
+				? "unlimited AI credits"
+				: "unlimited",
+		];
+	}
 	return [
-		window.used !== undefined &&
-		window.total !== undefined &&
-		!zeroCapUnlimited
+		window.used !== undefined && window.total !== undefined
 			? `${formatCount(window.used)}/${formatCount(window.total)} used`
 			: undefined,
-		window.remaining !== undefined && !zeroCapUnlimited
+		window.remaining !== undefined
 			? `${formatCount(window.remaining)} remaining`
 			: undefined,
 		window.percentRemaining !== undefined
 			? `${window.percentRemaining.toFixed(0)}% remaining`
 			: undefined,
-		window.unlimited ? "unlimited" : undefined,
 		window.cost !== undefined
 			? `${formatCurrency(window.cost)} cost`
 			: undefined,
@@ -1024,6 +1032,7 @@ function usageStatus(result: ProviderUsage): "ok" | "warn" | "error" {
 	}
 	// Fallback: simple percentage thresholds
 	const remaining = windows
+		.filter((window) => !window.unlimited)
 		.map((w) => w.percentRemaining)
 		.filter((v): v is number => v !== undefined);
 	if (remaining.some((v) => v <= 10)) return "error";
@@ -1033,17 +1042,9 @@ function usageStatus(result: ProviderUsage): "ok" | "warn" | "error" {
 
 function windowBarColor(provider: string, window: UsageWindow): string {
 	if (window.percentRemaining === undefined) return "muted";
-	// Prefer burn rate when available
-	const pace = quotaPace(provider, window);
-	if (pace !== undefined) {
-		const status = paceColor(pace);
-		if (status === "error") return "error";
-		if (status === "warn") return "warning";
-		return "success";
-	}
-	// Fallback: simple percentage thresholds
-	if (window.percentRemaining <= 10) return "error";
-	if (window.percentRemaining <= 25) return "warning";
+	const status = quotaWindowStatus(provider, window);
+	if (status === "error") return "error";
+	if (status === "warn") return "warning";
 	return "success";
 }
 function renderUsageContent(
@@ -1091,6 +1092,15 @@ function renderUsageContent(
 				}
 
 				for (const window of provider.windows ?? []) {
+					if (window.unlimited) {
+						lines.push(
+							truncateToWidth(
+								`  ${theme.fg("muted", windowParts(window).join(" · "))}`,
+								contentWidth,
+							),
+						);
+						continue;
+					}
 					const meter = renderMeter({
 						value:
 							window.percentRemaining === undefined
@@ -1102,7 +1112,7 @@ function renderUsageContent(
 						theme,
 					});
 					const label = renderBadge({
-						text: quotaLabel(window.label),
+						text: resetEta(window) ?? window.label,
 						fg: gruvbox.fg0,
 						bg: gruvbox.bg2,
 						theme,
@@ -1110,11 +1120,9 @@ function renderUsageContent(
 					});
 					const parts =
 						windowParts(window).join(" · ") || "available";
-					const eta = resetEta(window);
-					const etaText = eta ? ` ↻ ${eta}` : "";
 					lines.push(
 						truncateToWidth(
-							`  ${meter} ${label} ${parts}${formatReset(window.resetAt)}${etaText}`,
+							`  ${meter} ${label} ${parts}`,
 							contentWidth,
 						),
 					);
