@@ -19,6 +19,51 @@
     forAllSystems = function:
       nixpkgs.lib.genAttrs supportedSystems (system:
         function (import nixpkgs {inherit system;}));
+    shellUse = pkgs: let
+      version = "0.0.1-beta.3";
+      release =
+        {
+          aarch64-darwin = {
+            target = "aarch64-apple-darwin";
+            hash = "sha256-z2UV50ABN9wFUsLwZftBYCnb6DXWHc0bymu/3sWMPu4=";
+          };
+          x86_64-darwin = {
+            target = "x86_64-apple-darwin";
+            hash = "sha256-BT/eT9RZDfVxn+UguLomqo9K3uTus+hSp+u8D0Hx2mE=";
+          };
+          aarch64-linux = {
+            target = "aarch64-unknown-linux-musl";
+            hash = "sha256-JHxyz5sB+eoGIl9J9SxpLoaeFzeJkqxOem6ukvnMxVQ=";
+          };
+          x86_64-linux = {
+            target = "x86_64-unknown-linux-musl";
+            hash = "sha256-CPaoiqTeZNQJew2nIMifLNnA3nr1o1/rhLZEMhdH82o=";
+          };
+        }.${
+          pkgs.stdenv.hostPlatform.system
+        };
+    in
+      pkgs.stdenvNoCC.mkDerivation {
+        pname = "shell-use";
+        inherit version;
+        src = pkgs.fetchurl {
+          url = "https://github.com/microsoft/shell-use/releases/download/v${version}/shell-use-${release.target}.tar.gz";
+          inherit (release) hash;
+        };
+        sourceRoot = ".";
+        installPhase = ''
+          runHook preInstall
+          install -Dm755 shell-use $out/bin/shell-use
+          runHook postInstall
+        '';
+        meta = {
+          description = "Headless terminal CLI for driving and testing terminal applications";
+          homepage = "https://github.com/microsoft/shell-use";
+          license = pkgs.lib.licenses.mit;
+          mainProgram = "shell-use";
+          platforms = supportedSystems;
+        };
+      };
     vscodeLangservers = pkgs:
       pkgs.runCommand "vscode-langservers-extracted-node22" {} ''
         mkdir -p $out
@@ -44,6 +89,7 @@
       pkgs.basedpyright
       pkgs.bash-language-server
       pkgs.clang-tools
+      pkgs.delta
       pkgs.kotlin-language-server
       pkgs.lua-language-server
       pkgs.marksman
@@ -66,9 +112,18 @@
       default = self.homeManagerModules.opencode;
     };
 
+    packages = forAllSystems (pkgs: {
+      shell-use = shellUse pkgs;
+      default = shellUse pkgs;
+    });
+
     devShells = forAllSystems (pkgs: {
       default = pkgs.mkShell {
-        packages = lspTestPackages pkgs;
+        packages =
+          lspTestPackages pkgs
+          ++ [
+            (shellUse pkgs)
+          ];
       };
     });
 

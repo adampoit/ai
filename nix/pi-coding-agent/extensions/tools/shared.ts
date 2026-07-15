@@ -7,8 +7,8 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 import {
 	CachedComponent,
 	fillAnsiLine,
-	ToolShell,
 	type ExpansionAwareComponent,
+	type ToolPresentation,
 } from "../../components/index.ts";
 
 export type ResultInfo<TDetails> = {
@@ -18,7 +18,7 @@ export type ResultInfo<TDetails> = {
 };
 
 export type SkinState<TDetails> = {
-	shell?: ToolShell;
+	presentation?: ToolPresentation;
 	info?: ResultInfo<TDetails>;
 	startedAt?: number;
 	endedAt?: number;

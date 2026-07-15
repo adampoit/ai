@@ -14,10 +14,10 @@ import {
 	reapplyBackgroundAfterAnsiResets,
 	StaticLines,
 	styleText,
-	ToolShell,
+	ToolPresentation,
 	type BadgeSpec,
 	type ExpansionAwareComponent,
-	type ToolShellOptions,
+	type ToolPresentationModel,
 } from "../../components/index.ts";
 import { readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -106,7 +106,7 @@ type ResultInfo = {
 };
 
 type EditState = {
-	shell?: ToolShell;
+	presentation?: ToolPresentation;
 	info?: ResultInfo;
 	preview?: Preview;
 	previewArgsKey?: string;
@@ -121,12 +121,12 @@ type EditRenderContext = {
 	expanded: boolean;
 };
 
-function buildEditShell(
+function buildEditPresentation(
 	args: EditArgs | undefined,
 	state: EditState,
 	theme: Theme,
 	_context: EditRenderContext,
-): ToolShellOptions {
+): ToolPresentationModel {
 	const path = args?.path?.replace(/^@/, "") ?? "";
 	const summary = summarizeEditArgs(args);
 
@@ -400,7 +400,7 @@ export default function registerEditTool(pi: ExtensionAPI) {
 		label: "edit",
 		description: originalEdit.description,
 		parameters: originalEdit.parameters,
-		renderShell: "self",
+		renderShell: "default",
 
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			const editParams = params as { path: string };
@@ -430,8 +430,9 @@ export default function registerEditTool(pi: ExtensionAPI) {
 
 		renderCall(args, theme, context) {
 			const state = context.state as EditState;
-			const shell = state.shell ?? new ToolShell({ title: "edit" });
-			state.shell = shell;
+			const presentation =
+				state.presentation ?? new ToolPresentation({ title: "edit" });
+			state.presentation = presentation;
 
 			const previewInput = getPreviewInput(args);
 			const argsKey = previewInput
@@ -472,20 +473,20 @@ export default function registerEditTool(pi: ExtensionAPI) {
 					});
 			}
 
-			shell.setOptions(
-				buildEditShell(args as EditArgs, state, theme, {
+			presentation.setOptions(
+				buildEditPresentation(args as EditArgs, state, theme, {
 					executionStarted: context.executionStarted,
 					expanded: context.expanded,
 				}),
 			);
-			return shell;
+			return presentation;
 		},
 
 		renderResult(result, options, theme, context) {
 			const state = context.state as EditState;
 			state.info = { result, options, isError: context.isError };
-			state.shell?.setOptions(
-				buildEditShell(context.args as EditArgs, state, theme, {
+			state.presentation?.setOptions(
+				buildEditPresentation(context.args as EditArgs, state, theme, {
 					executionStarted: context.executionStarted,
 					expanded: context.expanded,
 				}),

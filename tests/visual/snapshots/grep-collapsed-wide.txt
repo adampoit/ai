@@ -1,0 +1,26 @@
+╭  grep  matches  ────────────────────────────────────────────────────────────────────────╮
+│    ├─ regex │ "needle"                                                                   │
+│    ╰─ path  │ .                                                                          │
+│                                                                                          │
+│                                                                                          │
+│  sample.txt:1: needle 01                                                                 │
+│  sample.txt:2: needle 02                                                                 │
+│  sample.txt:3: needle 03                                                                 │
+│  sample.txt:4: needle 04                                                                 │
+│  sample.txt:5: needle 05                                                                 │
+│  sample.txt:6: needle 06                                                                 │
+│  sample.txt:7: needle 07                                                                 │
+│  sample.txt:8: needle 08                                                                 │
+│  sample.txt:9: needle 09                                                                 │
+│  sample.txt:10: needle 10                                                                │
+│  sample.txt:11: needle 11                                                                │
+│  sample.txt:12: needle 12                                                                │
+│  sample.txt:13: needle 13                                                                │
+│  sample.txt:14: needle 14                                                                │
+│  sample.txt:15: needle 15                                                                │
+│  sample.txt:16: needle 16                                                                │
+│  sample.txt:17: needle 17                                                                │
+│  sample.txt:18: needle 18                                                                │
+│  … 7 more matches                                                                        │
+│                                                                                          │
+╰─  collapsed · ctrl+o expand  ────────────────────────────────────────────────────────────╯

@@ -3,14 +3,17 @@
 	"type": "module",
 	"scripts": {
 		"test": "node tests/run-tests.mjs",
+		"test:visual": "RUN_VISUAL_E2E=1 node --import tsx --test tests/visual/global-tool-framing.visual.test.ts",
 		"typecheck": "tsc --noEmit"
 	},
 	"devDependencies": {
-		"@earendil-works/pi-agent-core": "0.80.2",
-		"@earendil-works/pi-ai": "0.80.2",
-		"@earendil-works/pi-coding-agent": "0.80.2",
-		"@earendil-works/pi-tui": "0.80.2",
+		"@earendil-works/pi-agent-core": "0.80.5",
+		"@earendil-works/pi-ai": "0.80.5",
+		"@earendil-works/pi-coding-agent": "0.80.5",
+		"@earendil-works/pi-tui": "0.80.5",
 		"@types/node": "25.7.0",
+		"pi-web-access": "0.13.0",
+		"shell-use": "0.0.1-beta.3",
 		"tsx": "4.22.4",
 		"typebox": "1.1.38",
 		"typescript": "6.0.3"

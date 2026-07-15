@@ -6,38 +6,45 @@ Small, local TUI primitives for Pi extensions.
 
 - `ansi.ts`: ANSI-safe truecolor helpers, width-aware padding, background reapplication.
 - `gruvbox.ts`: shared Gruvbox palette.
-- `theme.ts`: adapter helpers for raw Gruvbox hex colors or Pi runtime `theme.fg()` / `theme.bg()` tokens.
+- `theme.ts`: adapters for raw Gruvbox colors and Pi theme tokens.
 - `layout.ts`: simple layout components (`Stack`, `StaticLines`).
 - `powerline.ts`: lualine/powerline-inspired status-line segments.
-- `blocks.ts`: higher-level primitives (`Pill`, `Badge`, `BlockFrame`, `BlockTitle`, `ToolShell`, `CodePane`, `TerminalPane`, `KeyHintLine`, `Meter`).
+- `blocks.ts`: framed blocks, panes, badges, invocation lines, and `ToolShell`.
+- `tool-presentation.ts`: the declarative `ToolPresentation` marker used by tool renderers.
 
-Extensions import these with relative `.js` specifiers, for example:
+## Tool rendering responsibilities
+
+Tool presentation has two layers:
+
+1. `extensions/global-tool-framing.ts` owns the outer `ToolShell` for every tool using Pi's default shell. It derives generic titles, lifecycle state, and invocation arguments for ordinary package tools while preserving their renderer components and images.
+2. Specialized tools return a `ToolPresentation`. Its symbol-marked model supplies richer status, telemetry, invocation data, and body panes to the same global shell.
+
+Specialized renderers must set `renderShell: "default"`; they must not instantiate `ToolShell` directly. Keep the presentation in `context.state` so `renderResult()` can update the same component after Pi renders the call slot.
 
 ```ts
-import { gruvbox, ToolShell, TerminalPane } from "../components/ui/index.ts";
-```
-
-## ToolShell pattern
-
-Use `renderShell: "self"` when a renderer owns its full frame. Keep one persistent shell in `context.state`, update it from `renderResult()`, and return an empty component for the result slot to avoid double frames. `ToolShell` uses the neutral Gruvbox `bg1` block background by default; communicate state through the border, status badge, and severity badges instead of tinting the whole block.
-
-```ts
-const shell = state.shell ?? new ToolShell({ title: "bash" });
-shell.setOptions({
+const presentation =
+	state.presentation ?? new ToolPresentation({ title: "bash" });
+state.presentation = presentation;
+presentation.setOptions({
 	title: "bash",
 	icon: "",
 	accent: gruvbox.orange,
 	state: "pending",
 	status: "running",
-	badges: [{ text: "npm test", bg: gruvbox.bg2 }],
+	telemetry: [{ text: "12 lines", bg: gruvbox.bg1 }],
 	children: new TerminalPane({ output }),
 });
+return presentation;
 ```
+
+`ToolPresentation.render()` emits only its rich body as a safe fallback. The adapter recognizes it through `Symbol.for(...)`, not `instanceof`, so reloads and duplicate module instances remain safe.
+
+The prototype adapter is intentionally limited to `ToolExecutionComponent` and validated against Pi 0.80.5, which is pinned in `package.json`. Incompatible internals produce a focused startup error rather than mixed framing.
 
 ## Conventions
 
 - Keep collapsed tool views compact; show richer panes when `expanded` is true.
 - Use stable accents: bash/orange, read/blue, grep/purple, edit/orange, success/green, error/red.
-- Keep block interiors inset from rounded borders. `BlockFrame` reserves an unpainted gutter when a background is present so colored content does not bleed into the line border.
-- Always truncate, wrap, or fill lines with width-aware helpers (`truncateToWidth`, `visibleWidth`, `fillAnsiLine`).
-- Prefer `ToolShell`/`BlockFrame` over ad-hoc ANSI borders in extensions.
+- Keep block interiors inset from rounded borders.
+- Always truncate, wrap, or fill lines with width-aware helpers.
+- Keep images outside textual frames; Pi retains ownership of image conversion and sizing.

@@ -1,0 +1,9 @@
+╭ Third Party Fixture  error  ─────────────────────╮
+│    ├─ value │ deterministic                      │
+│    ╰─ mode  │ error                              │
+│                                                  │
+│                                                  │
+│  plugin progress                                 │
+│  fixture execution failed                        │
+│                                                  │
+╰──────────────────────────────────────────────────╯

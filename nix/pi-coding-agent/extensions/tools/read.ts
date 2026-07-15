@@ -9,9 +9,9 @@ import {
 	CodePane,
 	gruvbox,
 	StaticLines,
-	ToolShell,
+	ToolPresentation,
 	type BadgeSpec,
-	type ToolShellOptions,
+	type ToolPresentationModel,
 } from "../../components/index.ts";
 import {
 	countLines,
@@ -55,12 +55,12 @@ function lineRange(args: ReadToolInput): string | undefined {
 	return `limit ${args.limit}`;
 }
 
-function buildReadShell(
+function buildReadPresentation(
 	args: ReadToolInput,
 	info: ResultInfo<ReadToolDetails | undefined> | undefined,
 	theme: Theme,
 	context: SkinRenderContext,
-): ToolShellOptions {
+): ToolPresentationModel {
 	const path = safeString(args.path);
 	const output = textOutput(info?.result);
 	const codeOutput = normalizeReadCode(output);
@@ -136,23 +136,26 @@ export default function registerReadTool(pi: ExtensionAPI) {
 	const originalRead = createReadToolDefinition(process.cwd());
 	pi.registerTool({
 		...originalRead,
-		renderShell: "self",
+		renderShell: "default",
 		renderCall(args, theme, context) {
 			const state = context.state as SkinState<
 				ReadToolDetails | undefined
 			>;
-			const shell = state.shell ?? new ToolShell({ title: "read" });
-			state.shell = shell;
-			shell.setOptions(buildReadShell(args, state.info, theme, context));
-			return shell;
+			const presentation =
+				state.presentation ?? new ToolPresentation({ title: "read" });
+			state.presentation = presentation;
+			presentation.setOptions(
+				buildReadPresentation(args, state.info, theme, context),
+			);
+			return presentation;
 		},
 		renderResult(result, options, theme, context) {
 			const state = context.state as SkinState<
 				ReadToolDetails | undefined
 			>;
 			state.info = { result, options, isError: context.isError };
-			state.shell?.setOptions(
-				buildReadShell(context.args, state.info, theme, context),
+			state.presentation?.setOptions(
+				buildReadPresentation(context.args, state.info, theme, context),
 			);
 			return new StaticLines([]);
 		},
