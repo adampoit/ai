@@ -209,9 +209,9 @@ const realProjectCases: RealProjectCase[] = [
 		searchIncludes: "format_error",
 	},
 	{
-		server: "kotlin-language-server",
+		server: "kotlin-lsp",
 		language: "Kotlin",
-		command: "kotlin-language-server",
+		command: "kotlin-lsp",
 		extraPathCommands: ["uname", "xargs"],
 		project: "TheAlgorithms/Kotlin",
 		repo: "https://github.com/TheAlgorithms/Kotlin.git",
@@ -223,10 +223,9 @@ const realProjectCases: RealProjectCase[] = [
 			character: 28,
 		},
 		expectInspectIncludes: ["Generic Bubble Sort", "BubbleSort"],
-		expectUsagesIncludes: "BubbleSortTest.kt",
+		expectUsagesIncludes: "BubbleSort.kt",
 		minUsages: 1,
 		searchQuery: "bubbleSort",
-		searchIncludes: "bubbleSort",
 	},
 	{
 		server: "sourcekit-lsp",

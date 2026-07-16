@@ -6,6 +6,7 @@
 }: let
   piCfg = config.programs.pi-coding-agent;
   piAgentSource = ./pi-coding-agent;
+  kotlinLsp = pkgs.callPackage ./kotlin-lsp.nix {};
 
   piAgentDir = pkgs.runCommand "pi-agent-dir" {} ''
     mkdir -p $out
@@ -48,7 +49,7 @@
     pkgs.delta
     (pkgs.lib.lowPrio pkgs.dotnet-sdk)
     pkgs.ffmpeg
-    pkgs.kotlin-language-server
+    kotlinLsp
     pkgs.ktlint
     pkgs.lua-language-server
     pkgs.marksman
