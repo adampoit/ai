@@ -72,6 +72,7 @@ in
       runHook preUnpack
       ${
         if stdenv.hostPlatform.isDarwin
+        # JetBrains uses a .sit suffix for Darwin, but these are ZIP archives.
         then "unzip -q $src"
         else "tar -xzf $src"
       }
