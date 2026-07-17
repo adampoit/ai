@@ -4,6 +4,7 @@ import { luaLspServer } from "./servers/lua.ts";
 import { typescriptLspServer } from "./servers/typescript.ts";
 import { pythonPyrightLspServer } from "./servers/python_pyright.ts";
 import { pythonRuffLspServer } from "./servers/python_ruff.ts";
+import { rustLspServer } from "./servers/rust.ts";
 import { csharpLspServer } from "./servers/csharp.ts";
 import { clangdLspServer } from "./servers/clangd.ts";
 import { kotlinLspServer } from "./servers/kotlin.ts";
@@ -25,6 +26,7 @@ export const lspServers: LspServerImplementation[] = [
 	typescriptLspServer,
 	pythonPyrightLspServer,
 	pythonRuffLspServer,
+	rustLspServer,
 	csharpLspServer,
 	clangdLspServer,
 	kotlinLspServer,

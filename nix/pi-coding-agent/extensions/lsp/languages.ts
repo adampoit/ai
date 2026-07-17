@@ -8,6 +8,7 @@ export const languageByExtension = new Map<string, string>([
 	[".mjs", "javascript"],
 	[".cjs", "javascript"],
 	[".py", "python"],
+	[".rs", "rust"],
 	[".cs", "csharp"],
 	[".c", "c"],
 	[".h", "cpp"],

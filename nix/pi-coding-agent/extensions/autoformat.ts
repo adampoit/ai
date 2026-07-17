@@ -374,6 +374,7 @@ const formatterByExtension: Record<string, string[]> = {
 	".lua": ["stylua"],
 	".nix": ["alejandra"],
 	".py": ["ruff", "format"],
+	".rs": ["cargo", "fmt", "--"],
 	".sh": ["shfmt", "-w", "-i", "0"],
 	".bash": ["shfmt", "-w", "-i", "0"],
 	".zsh": ["shfmt", "-w", "-i", "0"],

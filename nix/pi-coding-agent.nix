@@ -45,7 +45,9 @@
     pkgs.alejandra
     pkgs.basedpyright
     pkgs.bash-language-server
+    pkgs.cargo
     pkgs.clang-tools
+    pkgs.clippy
     pkgs.delta
     (pkgs.lib.lowPrio pkgs.dotnet-sdk)
     pkgs.ffmpeg
@@ -57,6 +59,9 @@
     pkgs.prettier
     pkgs.roslyn-ls
     pkgs.ruff
+    pkgs.rust-analyzer
+    pkgs.rustc
+    pkgs.rustfmt
     pkgs.shfmt
     pkgs.sourcekit-lsp
     pkgs.swift

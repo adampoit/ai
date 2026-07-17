@@ -257,6 +257,18 @@ console.log(total, broken);
 		search: { query: "greet", nameStartsWith: "greet" },
 	},
 	{
+		name: "Rust",
+		command: "rust-analyzer",
+		extraPathCommands: ["cargo", "clippy-driver", "rustc"],
+		fixtureDir: "rust-project",
+		diagnosticLast: true,
+		diagnostic: {
+			file: "src/broken.rs",
+			source: "#![deny(clippy::clone_on_copy)]\n\npub fn unnecessary_clone(value: i32) -> i32 {\n    value.clone()\n}\n",
+			messageIncludes: "using `clone` on type `i32`",
+		},
+	},
+	{
 		name: "Nix",
 		command: "nixd",
 		extraPathCommands: ["nix"],
