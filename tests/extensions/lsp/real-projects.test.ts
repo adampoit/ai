@@ -156,6 +156,26 @@ const realProjectCases: RealProjectCase[] = [
 		searchQuery: "SessionRedirectMixin",
 	},
 	{
+		server: "rust-analyzer",
+		language: "Rust",
+		command: "rust-analyzer",
+		extraPathCommands: ["cargo", "clippy-driver", "rustc"],
+		project: "BurntSushi/ripgrep",
+		repo: "https://github.com/BurntSushi/ripgrep.git",
+		sha: "4649aa9700619f94cf9c66876e9549d83420e16c",
+		file: "crates/searcher/src/searcher/mod.rs",
+		inspect: {
+			file: "crates/searcher/src/searcher/mod.rs",
+			line: 577,
+			character: 12,
+		},
+		expectInspectIncludes: ["Searcher", "searcher/mod.rs"],
+		expectUsagesIncludes: "searcher/mod.rs",
+		minUsages: 2,
+		searchQuery: "Searcher",
+		searchIncludes: "Searcher",
+	},
+	{
 		server: "nixd",
 		language: "Nix",
 		command: "nixd",
@@ -429,12 +449,26 @@ async function assertInspect(
 	ctx: TestExtensionContext,
 	projectCase: RealProjectCase,
 ) {
-	const inspect = await executeTool(
-		pi,
-		"lsp_inspect",
-		ctx,
-		projectCase.inspect,
-	);
+	let inspect: ToolResult | undefined;
+	for (let attempt = 0; attempt < 20; attempt++) {
+		inspect = await executeTool(
+			pi,
+			"lsp_inspect",
+			ctx,
+			projectCase.inspect,
+		);
+		const serialized = JSON.stringify(inspect.details?.result) ?? "";
+		if (
+			inspect.details?.ok === true &&
+			projectCase.expectInspectIncludes.every((expected) =>
+				serialized.includes(expected),
+			)
+		) {
+			break;
+		}
+		await new Promise((resolve) => setTimeout(resolve, 500));
+	}
+	assert.ok(inspect);
 	assert.equal(inspect.details?.ok, true, toolText(inspect));
 	const serialized = JSON.stringify(inspect.details.result);
 	for (const expected of projectCase.expectInspectIncludes) {
