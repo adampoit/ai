@@ -85,12 +85,13 @@
         writeWrapper vscode-json-language-server json-language-features/server/dist/node/jsonServerMain.js
         writeWrapper vscode-eslint-language-server eslint-language-features/server/out/eslintServer.js
       '';
+    kotlinLsp = pkgs: pkgs.callPackage ./nix/kotlin-lsp.nix {};
     lspTestPackages = pkgs: [
       pkgs.basedpyright
       pkgs.bash-language-server
       pkgs.clang-tools
       pkgs.delta
-      pkgs.kotlin-language-server
+      (kotlinLsp pkgs)
       pkgs.lua-language-server
       pkgs.marksman
       pkgs.nixd
@@ -113,6 +114,7 @@
     };
 
     packages = forAllSystems (pkgs: {
+      kotlin-lsp = kotlinLsp pkgs;
       shell-use = shellUse pkgs;
       default = shellUse pkgs;
     });

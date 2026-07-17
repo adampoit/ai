@@ -1,14 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import {
-	access,
-	chmod,
-	cp,
-	mkdir,
-	mkdtemp,
-	readFile,
-	writeFile,
-} from "node:fs/promises";
+import { access, chmod, cp, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -398,13 +390,13 @@ public static class Broken
 	},
 	{
 		name: "Kotlin",
-		command: "kotlin-language-server",
+		command: "kotlin-lsp",
 		extraPathCommands: ["uname", "xargs"],
 		fixtureDir: "kotlin-project",
 		diagnostic: {
 			file: "Broken.kt",
 			source: "package toy\n\nfun broken() {\n    val value =\n}\n",
-			messageIncludes: "must either have a type annotation",
+			messageIncludes: "Expecting an expression",
 		},
 		inspect: {
 			params: { file: "Main.kt", symbol: "greet" },
@@ -431,7 +423,7 @@ public static class Broken
 			usagesInclude: "Main.kt",
 			minUsages: 1,
 		},
-		search: { query: "greet", nameStartsWith: "greet" },
+		unsupportedSearch: "greet",
 	},
 	{
 		name: "Swift",
@@ -936,10 +928,6 @@ for (const languageCase of languageCases) {
 					);
 				}
 
-				if (languageCase.command === "kotlin-language-server") {
-					await assertKotlinLspCache(cwd);
-				}
-
 				const refresh = await executeTool(pi, "lsp_refresh", ctx, {});
 				assert.equal(toolText(refresh), "LSP servers refreshed.");
 				assert.deepEqual(refresh.details, { refreshed: true });
@@ -948,20 +936,6 @@ for (const languageCase of languageCases) {
 			}
 		});
 	});
-}
-
-async function assertKotlinLspCache(cwd: string) {
-	const databasePath = path.join(cwd, "kls_database.db");
-	const database = await readFile(databasePath);
-	assert.ok(
-		database.length > 100,
-		"kotlin-language-server should write a non-empty SQLite cache database",
-	);
-	assert.equal(
-		database.subarray(0, 16).toString("utf8"),
-		"SQLite format 3\0",
-		"kotlin-language-server cache should be a SQLite database",
-	);
 }
 
 async function assertDiagnostics(
