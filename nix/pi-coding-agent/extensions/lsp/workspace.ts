@@ -1,5 +1,6 @@
-import { access } from "node:fs/promises";
 import { spawn } from "node:child_process";
+import { constants } from "node:fs";
+import { access } from "node:fs/promises";
 import path from "node:path";
 import { languageByExtension } from "./languages.ts";
 
@@ -90,6 +91,40 @@ export async function fileExists(file: string) {
 	} catch {
 		return false;
 	}
+}
+
+export async function commandPaths(
+	command: string,
+	environment: NodeJS.ProcessEnv = process.env,
+): Promise<string[]> {
+	const environmentPath = environment.PATH ?? environment.Path ?? "";
+	const names = commandNames(command, environment.PATHEXT);
+	const candidates: string[] = [];
+	const seen = new Set<string>();
+	for (const directory of environmentPath.split(path.delimiter)) {
+		if (!directory) continue;
+		for (const name of names) {
+			const candidate = path.resolve(directory, name);
+			if (seen.has(candidate)) continue;
+			seen.add(candidate);
+			try {
+				await access(candidate, constants.X_OK);
+				candidates.push(candidate);
+			} catch {}
+		}
+	}
+	return candidates;
+}
+
+function commandNames(command: string, pathExtensions?: string): string[] {
+	if (process.platform !== "win32" || path.extname(command)) return [command];
+	const extensions = (pathExtensions ?? ".COM;.EXE;.BAT;.CMD")
+		.split(";")
+		.filter(Boolean);
+	return [
+		command,
+		...extensions.map((extension) => `${command}${extension}`),
+	];
 }
 
 export async function commandPath(

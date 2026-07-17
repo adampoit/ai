@@ -832,7 +832,9 @@ setInterval(() => {}, 1000);
 
 	const oldPath = process.env.PATH;
 	const oldTerminatedFile = process.env.PI_FAKE_LSP_TERMINATED;
-	process.env.PATH = `${bin}${path.delimiter}${oldPath ?? ""}`;
+	process.env.PATH = [bin, path.dirname(process.execPath)].join(
+		path.delimiter,
+	);
 	process.env.PI_FAKE_LSP_TERMINATED = terminatedFile;
 	try {
 		const pi = loadExtension();

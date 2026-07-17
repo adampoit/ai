@@ -20,8 +20,7 @@ import type {
 	SymbolPositionParams,
 } from "./types.ts";
 import {
-	commandExists,
-	commandPath,
+	commandPaths,
 	commandVersion,
 	delay,
 	discoverFiles,
@@ -92,6 +91,20 @@ function matchesDocumentSymbolName(candidate: unknown, name: string) {
 		next !== undefined &&
 		!/[A-Za-z0-9_]/.test(next)
 	);
+}
+
+function summarizeServerFailure(error: unknown): string {
+	const message = error instanceof Error ? error.message : String(error);
+	const lines = [
+		...new Set(
+			message
+				.split("\n")
+				.map((line) => line.trim())
+				.filter(Boolean),
+		),
+	];
+	const summary = lines.slice(0, 6).join("; ");
+	return lines.length > 6 ? `${summary}; …` : summary;
 }
 
 export function getManager(
@@ -430,12 +443,15 @@ export class LspManager {
 		const entries = await Promise.all(
 			lspServers.map(async (server) => {
 				const key = `${server.command}\0${server.args.join("\0")}`;
-				const executablePath = await commandPath(
-					server.command,
-					this.cwd,
-					signal,
-				);
-				const running = this.clients.get(key)?.started ?? false;
+				const runningClient = this.clients.get(key);
+				const executablePath =
+					runningClient?.executablePath ??
+					(
+						await commandPaths(server.command, {
+							...process.env,
+						})
+					)[0];
+				const running = runningClient?.started ?? false;
 				const detectedLanguages = server.languages.filter((language) =>
 					projectLanguages.has(language),
 				);
@@ -554,43 +570,67 @@ export class LspManager {
 		const key = `${config.command}\0${config.args.join("\0")}`;
 		const existing = this.clients.get(key);
 		if (existing?.started) return existing;
-		if (!(await commandExists(config.command, this.cwd, signal)))
-			throw new Error(`${config.command} is not available on PATH`);
-		const client = new LspClient(this.cwd, config, signal);
-		client.onNotification = (method, params) => {
-			if (method !== "textDocument/publishDiagnostics") return;
-			const value = params as {
-				uri: string;
-				diagnostics?: Array<{
-					range: { start: { line: number; character: number } };
-					severity?: number;
-					source?: string;
-					message: string;
-				}>;
-			};
-			const file = path.normalize(
-				path.relative(this.cwd, fileURLToPath(value.uri)),
+
+		const executablePaths = await commandPaths(config.command, {
+			...process.env,
+		});
+		if (executablePaths.length === 0) {
+			const error = new Error(
+				`${config.command} is not available on PATH`,
 			);
-			this.diagnostics.set(
-				file,
-				lspDiagnosticsToDiagnostics(file, value.diagnostics ?? []),
-			);
-		};
-		try {
-			await initializeClient(
-				this.cwd,
-				client,
-				config,
-				defaultCapabilities(),
-			);
-		} catch (error) {
-			await client.stop().catch(() => undefined);
 			this.notifyServerFailure(config, error);
 			throw error;
 		}
-		this.clients.set(key, client);
-		this.updateStatus();
-		return client;
+
+		const failures: string[] = [];
+		for (const executablePath of executablePaths) {
+			const client = new LspClient(
+				this.cwd,
+				config,
+				signal,
+				executablePath,
+			);
+			client.onNotification = (method, params) => {
+				if (method !== "textDocument/publishDiagnostics") return;
+				const value = params as {
+					uri: string;
+					diagnostics?: Array<{
+						range: { start: { line: number; character: number } };
+						severity?: number;
+						source?: string;
+						message: string;
+					}>;
+				};
+				const file = path.normalize(
+					path.relative(this.cwd, fileURLToPath(value.uri)),
+				);
+				this.diagnostics.set(
+					file,
+					lspDiagnosticsToDiagnostics(file, value.diagnostics ?? []),
+				);
+			};
+			try {
+				await initializeClient(
+					this.cwd,
+					client,
+					config,
+					defaultCapabilities(),
+				);
+				this.clients.set(key, client);
+				this.updateStatus();
+				return client;
+			} catch (error) {
+				await client.stop().catch(() => undefined);
+				if (signal?.aborted) throw error;
+				failures.push(
+					`${executablePath}: ${summarizeServerFailure(error)}`,
+				);
+			}
+		}
+
+		const error = new Error(failures.join("\n"));
+		this.notifyServerFailure(config, error);
+		throw error;
 	}
 
 	private notifyServerFailure(config: ServerConfig, error: unknown) {

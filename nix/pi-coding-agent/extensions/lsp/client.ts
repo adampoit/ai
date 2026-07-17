@@ -37,6 +37,7 @@ export class LspClient {
 		private cwd: string,
 		private config: ServerConfig,
 		private signal?: AbortSignal,
+		readonly executablePath = config.command,
 	) {
 		this.name = config.command;
 		this.projectInitialized = config.isProjectInitialized ?? true;
@@ -52,22 +53,29 @@ export class LspClient {
 			processCwd,
 			this.signal,
 		);
-		this.proc = spawn(this.config.command, this.config.args, {
+		const proc = spawn(this.executablePath, this.config.args, {
 			cwd: processCwd,
 			detached: process.platform !== "win32",
 			signal: this.signal,
 			env,
 		});
-		this.proc.stdout.on("data", (chunk: Buffer) => this.read(chunk));
-		this.proc.stderr.on("data", (chunk: Buffer) => {
+		this.proc = proc;
+		proc.stdout.on("data", (chunk: Buffer) => this.read(chunk));
+		proc.stderr.on("data", (chunk: Buffer) => {
 			this.stderr = `${this.stderr}${chunk.toString("utf8")}`.slice(
 				-4000,
 			);
 		});
-		this.proc.on("error", (error) => this.rejectAll(error));
-		this.proc.on("exit", (code) => {
+		proc.stdin.on("error", (error) => {
+			if (this.proc !== proc) return;
+			killProcessGroup(proc, "SIGTERM");
+			this.markProcessStopped(proc, error);
+		});
+		proc.on("error", (error) => this.markProcessStopped(proc, error));
+		proc.on("exit", (code) => {
 			const details = this.stderr.trim();
-			this.rejectAll(
+			this.markProcessStopped(
+				proc,
 				new Error(
 					`${this.config.command} exited with ${code}${details ? `: ${details}` : ""}`,
 				),
@@ -107,7 +115,7 @@ export class LspClient {
 		const proc = this.proc;
 		if (!proc) return;
 		try {
-			await this.request("shutdown", null, 1000).catch(() => undefined);
+			await this.request("shutdown", null, 1000);
 			this.notify("exit");
 		} catch {}
 		killProcessGroup(proc, "SIGTERM");
@@ -115,8 +123,10 @@ export class LspClient {
 			killProcessGroup(proc, "SIGKILL");
 			await waitForProcessExit(proc, 1000);
 		}
-		this.proc = undefined;
-		this.started = false;
+		if (this.proc === proc) {
+			this.proc = undefined;
+			this.started = false;
+		}
 	}
 
 	setServerCapabilities(capabilities: unknown) {
@@ -155,11 +165,21 @@ export class LspClient {
 	}
 
 	private send(message: RpcMessage) {
-		if (!this.proc)
+		const proc = this.proc;
+		if (
+			!proc ||
+			proc.exitCode !== null ||
+			proc.signalCode !== null ||
+			!proc.stdin.writable ||
+			proc.stdin.destroyed
+		)
 			throw new Error(`${this.config.command} is not running`);
 		const body = Buffer.from(JSON.stringify(message), "utf8");
-		this.proc.stdin.write(`Content-Length: ${body.length}\r\n\r\n`);
-		this.proc.stdin.write(body);
+		const header = Buffer.from(
+			`Content-Length: ${body.length}\r\n\r\n`,
+			"ascii",
+		);
+		proc.stdin.write(Buffer.concat([header, body]));
 	}
 
 	private read(chunk: Buffer) {
@@ -227,6 +247,16 @@ export class LspClient {
 		this.projectInitializationWaiters.clear();
 	}
 
+	private markProcessStopped(
+		proc: ChildProcessWithoutNullStreams,
+		error: Error,
+	) {
+		if (this.proc !== proc) return;
+		this.proc = undefined;
+		this.started = false;
+		this.rejectAll(error);
+	}
+
 	private rejectAll(error: Error) {
 		for (const pending of this.pending.values()) pending.reject(error);
 		this.pending.clear();
@@ -275,7 +305,7 @@ export async function initializeClient(
 				},
 			],
 		},
-		null,
+		30_000,
 	)) as { capabilities?: unknown };
 	client.setServerCapabilities(init.capabilities);
 	client.notify("initialized", {});
