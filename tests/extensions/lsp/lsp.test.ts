@@ -257,6 +257,53 @@ console.log(total, broken);
 		search: { query: "greet", nameStartsWith: "greet" },
 	},
 	{
+		name: "Rust",
+		command: "rust-analyzer",
+		extraPathCommands: ["cargo", "clippy-driver", "rustc"],
+		fixtureDir: "rust-project",
+		diagnosticLast: true,
+		diagnostic: {
+			file: "src/broken.rs",
+			source: "#![deny(clippy::clone_on_copy)]\n\npub fn unnecessary_clone(value: i32) -> i32 {\n    value.clone()\n}\n",
+			messageIncludes: "using `clone` on type `i32`",
+		},
+		inspect: {
+			params: { file: "src/lib.rs", symbol: "greet" },
+			expectedPosition: { file: "src/lib.rs", line: 3, character: 8 },
+			hoverIncludes: "greet",
+			definitionIncludes: "src/lib.rs",
+			usagesInclude: "src/main.rs",
+		},
+		positionalInspect: {
+			params: { file: "src/broken.rs", line: 3, character: 8 },
+			expectedPosition: {
+				file: "src/broken.rs",
+				line: 3,
+				character: 8,
+			},
+			hoverIncludes: "unnecessary_clone",
+			definitionIncludes: "src/broken.rs",
+			usagesInclude: "src/broken.rs",
+			minUsages: 1,
+		},
+		usages: {
+			params: { file: "src/lib.rs", symbol: "greet" },
+			expectedPosition: { file: "src/lib.rs", line: 3, character: 8 },
+			usagesInclude: "src/main.rs",
+		},
+		positionalUsages: {
+			params: { file: "src/broken.rs", line: 3, character: 8 },
+			expectedPosition: {
+				file: "src/broken.rs",
+				line: 3,
+				character: 8,
+			},
+			usagesInclude: "src/broken.rs",
+			minUsages: 1,
+		},
+		search: { query: "greet", nameStartsWith: "greet" },
+	},
+	{
 		name: "Nix",
 		command: "nixd",
 		extraPathCommands: ["nix"],
@@ -901,6 +948,7 @@ for (const languageCase of languageCases) {
 					await assertSearch(pi, ctx, languageCase.search);
 				}
 				if (languageCase.diagnostic && languageCase.diagnosticLast) {
+					await executeTool(pi, "lsp_refresh", ctx, {});
 					await assertDiagnostics(pi, ctx, languageCase);
 				}
 				if (languageCase.unsupportedDiagnostic) {
@@ -987,7 +1035,7 @@ async function assertInspect(
 	expectation: InspectionExpectation,
 ) {
 	let inspect: ToolResult | undefined;
-	for (let attempt = 0; attempt < 5; attempt++) {
+	for (let attempt = 0; attempt < 20; attempt++) {
 		inspect = await executeTool(pi, "lsp_inspect", ctx, expectation.params);
 		const hover = inspect.details?.result?.hover;
 		const hoverReady = (() => {
@@ -1299,5 +1347,5 @@ function toolText(result: ToolResult) {
 }
 
 function jsonIncludes(value: unknown, text: string) {
-	return JSON.stringify(value).includes(text);
+	return JSON.stringify(value)?.includes(text) ?? false;
 }

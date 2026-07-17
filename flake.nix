@@ -89,7 +89,9 @@
     lspTestPackages = pkgs: [
       pkgs.basedpyright
       pkgs.bash-language-server
+      pkgs.cargo
       pkgs.clang-tools
+      pkgs.clippy
       pkgs.delta
       (kotlinLsp pkgs)
       pkgs.lua-language-server
@@ -98,6 +100,8 @@
       pkgs.nodejs_24
       pkgs.roslyn-ls
       pkgs.ruff
+      pkgs.rust-analyzer
+      pkgs.rustc
       pkgs.sourcekit-lsp
       pkgs.swift
       pkgs.swiftpm
