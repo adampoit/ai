@@ -38,7 +38,10 @@
     theme = lib.mkDefault "gruvbox";
     hideThinkingBlock = lib.mkDefault false;
     enableSkillCommands = lib.mkDefault true;
-    packages = ["npm:pi-web-access@0.13.0"];
+    packages = [
+      "npm:pi-web-access@0.13.0"
+      "git:github.com/adampoit/unified-review.nvim"
+    ];
   };
 
   piExtraPackages = [
