@@ -265,6 +265,9 @@ export default function (pi: ExtensionAPI) {
 					.then((result) => {
 						if (quotaKey === provider) quota = result;
 					})
+					.catch(() => {
+						if (quotaKey === provider) quota = undefined;
+					})
 					.finally(() => {
 						quotaLoading = false;
 						tui.requestRender();

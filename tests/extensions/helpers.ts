@@ -51,6 +51,7 @@ export type TestExtensionContext = {
 	model?: { provider: string; id: string };
 	modelRegistry: {
 		find: (provider: string, model: string) => unknown;
+		getAll: () => Array<{ provider: string }>;
 		getApiKeyForProvider: (provider: string) => Promise<string | undefined>;
 		authStorage: {
 			list: () => string[];
@@ -227,6 +228,7 @@ export async function createContext(
 		model: { provider: "test", id: "test-model" },
 		modelRegistry: {
 			find: () => undefined,
+			getAll: () => [],
 			getApiKeyForProvider: async () => undefined,
 			authStorage: {
 				list: () => [],

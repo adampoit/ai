@@ -1,7 +1,8 @@
-import type {
-	ExtensionAPI,
-	ExtensionCommandContext,
-	ExtensionContext,
+import {
+	readStoredCredential,
+	type ExtensionAPI,
+	type ExtensionCommandContext,
+	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 import {
@@ -302,11 +303,35 @@ async function fetchJson(
 	}
 }
 
+type StoredCredential = ReturnType<typeof readStoredCredential>;
+
+type LegacyAuthStorage = {
+	list?: () => unknown;
+	get?: (key: string) => StoredCredential;
+};
+
+function legacyAuthStorage(
+	ctx: ExtensionContext,
+): LegacyAuthStorage | undefined {
+	return (
+		ctx.modelRegistry as typeof ctx.modelRegistry & {
+			authStorage?: LegacyAuthStorage;
+		}
+	).authStorage;
+}
+
 function authKeysMatching(ctx: ExtensionContext, patterns: RegExp[]): string[] {
-	return ctx.modelRegistry.authStorage
-		.list()
+	const legacyKeys = legacyAuthStorage(ctx)?.list?.();
+	const keys = Array.isArray(legacyKeys)
+		? legacyKeys.filter((key): key is string => typeof key === "string")
+		: ctx.modelRegistry.getAll().map((model) => model.provider);
+	return [...new Set(keys)]
 		.filter((key) => patterns.some((pattern) => pattern.test(key)))
 		.sort();
+}
+
+function storedCredential(ctx: ExtensionContext, key: string) {
+	return legacyAuthStorage(ctx)?.get?.(key) ?? readStoredCredential(key);
 }
 
 export async function openAiUsage(
@@ -321,7 +346,7 @@ export async function openAiUsage(
 		...authKeysMatching(ctx, [/openai/i, /codex/i, /chatgpt/i]),
 	].filter((key, index, all) => all.indexOf(key) === index);
 	const credential = keys
-		.map((key) => ctx.modelRegistry.authStorage.get(key))
+		.map((key) => storedCredential(ctx, key))
 		.find((candidate) => candidate?.type === "oauth" && candidate.access);
 	if (!credential || credential.type !== "oauth" || !credential.access) {
 		return {
@@ -675,7 +700,7 @@ async function copilotTokens(ctx: ExtensionContext): Promise<CopilotToken[]> {
 	].filter((key, index, all) => all.indexOf(key) === index);
 	const tokens = await Promise.all(
 		keys.map(async (key): Promise<CopilotToken[]> => {
-			const credential = ctx.modelRegistry.authStorage.get(key);
+			const credential = storedCredential(ctx, key);
 			if (credential?.type === "oauth") {
 				return [
 					credential.refresh
