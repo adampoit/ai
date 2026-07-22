@@ -14,7 +14,14 @@ function findTests(directory) {
 const testFiles = findTests("tests").sort();
 const result = spawnSync(
 	process.execPath,
-	["--import", "tsx", "--test", ...process.argv.slice(2), ...testFiles],
+	[
+		"--import",
+		"tsx",
+		"--test",
+		"--test-concurrency=1",
+		...process.argv.slice(2),
+		...testFiles,
+	],
 	{ stdio: "inherit" },
 );
 
