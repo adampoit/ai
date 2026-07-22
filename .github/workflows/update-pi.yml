@@ -97,7 +97,7 @@ jobs:
               run: |
                   set -euo pipefail
                   nix develop -c npm run typecheck
-                  nix develop -c npm run test:unit
+                  nix develop -c npm test
                   nix flake check --print-build-logs
 
             - name: Create pull request

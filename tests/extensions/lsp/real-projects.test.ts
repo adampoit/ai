@@ -376,11 +376,16 @@ const realProjectCases: RealProjectCase[] = [
 	},
 ];
 
+const supportedRealProjectCases = realProjectCases.filter(
+	(projectCase) =>
+		projectCase.language !== "Swift" || process.platform === "darwin",
+);
+
 test(
 	"lsp extension tools execute against fixed real open source projects",
 	{ timeout: 900_000 },
 	async (t) => {
-		for (const projectCase of realProjectCases) {
+		for (const projectCase of supportedRealProjectCases) {
 			await t.test(
 				`${projectCase.server} on ${projectCase.project}`,
 				{ timeout: 180_000 },

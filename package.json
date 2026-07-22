@@ -3,7 +3,6 @@
 	"type": "module",
 	"scripts": {
 		"test": "node tests/run-tests.mjs",
-		"test:unit": "node tests/run-tests.mjs --unit",
 		"test:visual": "RUN_VISUAL_E2E=1 node --import tsx --test tests/visual/global-tool-framing.visual.test.ts",
 		"typecheck": "tsc --noEmit"
 	},

@@ -423,6 +423,7 @@ public static class Broken
 				character: 13,
 			},
 			usagesInclude: "greeter.cpp",
+			minUsages: 1,
 		},
 		positionalUsages: {
 			params: { file: "src/greeter.cpp", line: 4, character: 13 },
@@ -432,6 +433,7 @@ public static class Broken
 				character: 13,
 			},
 			usagesInclude: "greeter.cpp",
+			minUsages: 1,
 		},
 		search: { query: "greet", nameStartsWith: "greet" },
 	},
@@ -904,7 +906,12 @@ test("lsp command renders project detection reasons", async () => {
 	assert.ok(output.includes("detected because of src/index.ts"), output);
 });
 
-for (const languageCase of languageCases) {
+const supportedLanguageCases = languageCases.filter(
+	(languageCase) =>
+		languageCase.name !== "Swift" || process.platform === "darwin",
+);
+
+for (const languageCase of supportedLanguageCases) {
 	test(`lsp extension tools execute against a ${languageCase.name} toy project`, async () => {
 		assertCommandAvailable(languageCase.command);
 
@@ -1046,13 +1053,19 @@ async function assertInspect(
 				hover?.result !== undefined
 			);
 		})();
+		const definitionReady = expectation.definitionIncludes
+			? jsonIncludes(
+					inspect.details?.result?.definition,
+					expectation.definitionIncludes,
+				)
+			: true;
 		const usagesReady = expectation.usagesInclude
 			? jsonIncludes(
 					inspect.details?.result?.usages,
 					expectation.usagesInclude,
 				)
 			: true;
-		if (hoverReady && usagesReady) break;
+		if (hoverReady && definitionReady && usagesReady) break;
 		await new Promise((resolve) => setTimeout(resolve, 500));
 	}
 	assert.ok(inspect);

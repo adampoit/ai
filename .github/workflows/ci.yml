@@ -48,7 +48,7 @@ jobs:
               run: nix develop -c npm run typecheck
 
             - name: Test extensions
-              run: nix develop -c npm run test:unit
+              run: nix develop -c npm test
 
     build:
         name: build (${{ matrix.name }})
