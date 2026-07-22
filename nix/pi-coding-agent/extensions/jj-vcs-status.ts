@@ -2,13 +2,26 @@ import { spawnSync } from "node:child_process";
 
 const PATCHED = Symbol("jj-vcs-status-patched");
 
+const LABEL_TTL_MS = 10_000;
+const labelCache = new Map<
+	string,
+	{ label: string | undefined; time: number }
+>();
+const isJjRoot = new Map<string, boolean>();
+
 function getJjLabelSync(cwd: string): string | undefined {
-	const root = spawnSync("jj", ["root", "--ignore-working-copy"], {
-		cwd,
-		encoding: "utf8",
-		timeout: 2000,
-	});
-	if (root.status !== 0) return undefined;
+	const cached = labelCache.get(cwd);
+	if (cached && Date.now() - cached.time < LABEL_TTL_MS) return cached.label;
+
+	if (!isJjRoot.has(cwd)) {
+		const root = spawnSync("jj", ["root", "--ignore-working-copy"], {
+			cwd,
+			encoding: "utf8",
+			timeout: 2000,
+		});
+		isJjRoot.set(cwd, root.status === 0);
+	}
+	if (!isJjRoot.get(cwd)) return undefined;
 
 	const result = spawnSync(
 		"jj",
@@ -28,11 +41,14 @@ function getJjLabelSync(cwd: string): string | undefined {
 		],
 		{ cwd, encoding: "utf8", timeout: 3000 },
 	);
-	if (result.status !== 0) return undefined;
-
-	let line = (result.stdout ?? "").trim().split(/\s+/)[0] ?? "";
-	if (line.endsWith("*")) line = line.slice(0, -1);
-	return line || "@";
+	let label: string | undefined;
+	if (result.status === 0) {
+		let line = (result.stdout ?? "").trim().split(/\s+/)[0] ?? "";
+		if (line.endsWith("*")) line = line.slice(0, -1);
+		label = line || "@";
+	}
+	labelCache.set(cwd, { label, time: Date.now() });
+	return label;
 }
 
 export default async function () {
