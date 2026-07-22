@@ -183,6 +183,12 @@ function contextColor(percent: number | null | undefined): string {
 	return gruvbox.green;
 }
 
+function formatTokensPerSecond(tokensPerSecond: number): string {
+	return tokensPerSecond < 100
+		? `${tokensPerSecond.toFixed(1)} t/s`
+		: `${Math.round(tokensPerSecond)} t/s`;
+}
+
 function latestThinkingLevel(
 	entries: ReadonlyArray<{ type: string; thinkingLevel?: string }>,
 ): string {
@@ -229,10 +235,47 @@ function contextSegment(
 }
 
 export default function (pi: ExtensionAPI) {
+	let requestStartedAt: number | undefined;
+	let turnOutputTokens = 0;
+	let turnProviderDurationMs = 0;
+	let turnTokensPerSecond: number | undefined;
 	let markQuotaStale: (() => void) | undefined;
+	let requestFooterRender: (() => void) | undefined;
 
 	pi.on("agent_end", () => {
 		markQuotaStale?.();
+	});
+
+	pi.on("before_agent_start", () => {
+		requestStartedAt = undefined;
+		turnOutputTokens = 0;
+		turnProviderDurationMs = 0;
+		turnTokensPerSecond = undefined;
+		requestFooterRender?.();
+	});
+
+	pi.on("before_provider_request", () => {
+		requestStartedAt = performance.now();
+	});
+
+	pi.on("message_end", (event) => {
+		if (event.message.role !== "assistant") return;
+		const startedAt = requestStartedAt;
+		requestStartedAt = undefined;
+		if (
+			startedAt === undefined ||
+			!Number.isFinite(event.message.usage.output) ||
+			event.message.usage.output < 0
+		)
+			return;
+
+		const durationMs = performance.now() - startedAt;
+		if (durationMs <= 0) return;
+		turnOutputTokens += event.message.usage.output;
+		turnProviderDurationMs += durationMs;
+		turnTokensPerSecond =
+			turnOutputTokens / (turnProviderDurationMs / 1000);
+		requestFooterRender?.();
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
@@ -240,6 +283,8 @@ export default function (pi: ExtensionAPI) {
 			const unsubscribe = footerData.onBranchChange(() =>
 				tui.requestRender(),
 			);
+			const requestRender = () => tui.requestRender();
+			requestFooterRender = requestRender;
 			let quota: ProviderUsage | undefined;
 			let quotaKey: ReturnType<typeof quotaProvider>;
 			let quotaLoading = false;
@@ -277,6 +322,8 @@ export default function (pi: ExtensionAPI) {
 			return {
 				dispose: () => {
 					if (markQuotaStale) markQuotaStale = undefined;
+					if (requestFooterRender === requestRender)
+						requestFooterRender = undefined;
 					unsubscribe();
 				},
 				invalidate() {},
@@ -327,7 +374,20 @@ export default function (pi: ExtensionAPI) {
 						modelSegment(modelWithReasoning),
 						contextSegment(contextPart, context?.percent),
 					]);
-					const secondaryParts = [...statuses];
+					const secondaryParts = [
+						...(turnTokensPerSecond === undefined
+							? []
+							: [
+									{
+										text: formatTokensPerSecond(
+											turnTokensPerSecond,
+										),
+										fg: gruvbox.aqua,
+										bg: gruvbox.bg,
+									},
+								]),
+						...statuses,
+					];
 					let quotaIndex = 0;
 					let showQuota = quotaOptions.length > 0;
 					const buildSecondary = () =>
