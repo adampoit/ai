@@ -1,4 +1,4 @@
-{
+{piPackage}: {
   config,
   lib,
   pkgs,
@@ -231,6 +231,7 @@ in {
   config = {
     programs.pi-coding-agent = {
       enable = true;
+      package = lib.mkDefault (piPackage pkgs);
       context = ../global-instructions.md;
       extraPackages = piExtraPackages;
       inherit settings;

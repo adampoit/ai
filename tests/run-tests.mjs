@@ -11,10 +11,19 @@ function findTests(directory) {
 		.filter((file) => file.endsWith(".test.ts"));
 }
 
-const testFiles = findTests("tests").sort();
+const unitOnly = process.argv.includes("--unit");
+const testArguments = process.argv.slice(2).filter((argument) => argument !== "--unit");
+const testFiles = findTests("tests")
+	.filter(
+		(file) =>
+			!unitOnly ||
+			(!file.endsWith("tests/extensions/lsp/lsp.test.ts") &&
+				!file.endsWith("tests/extensions/lsp/real-projects.test.ts")),
+	)
+	.sort();
 const result = spawnSync(
 	process.execPath,
-	["--import", "tsx", "--test", ...process.argv.slice(2), ...testFiles],
+	["--import", "tsx", "--test", ...testArguments, ...testFiles],
 	{ stdio: "inherit" },
 );
 

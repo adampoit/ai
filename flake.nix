@@ -86,6 +86,19 @@
         writeWrapper vscode-eslint-language-server eslint-language-features/server/out/eslintServer.js
       '';
     kotlinLsp = pkgs: pkgs.callPackage ./nix/kotlin-lsp.nix {};
+    piPackage = pkgs: pkgs.callPackage ./nix/pi-coding-agent-package.nix {};
+    piVersion = (import ./nix/pi-coding-agent-source.nix).version;
+    packageJson = builtins.fromJSON (builtins.readFile ./package.json);
+    piNpmPackages = [
+      "@earendil-works/pi-agent-core"
+      "@earendil-works/pi-ai"
+      "@earendil-works/pi-coding-agent"
+      "@earendil-works/pi-tui"
+    ];
+    piVersionsMatch =
+      builtins.all
+      (package: packageJson.devDependencies.${package} == piVersion)
+      piNpmPackages;
     lspTestPackages = pkgs: [
       pkgs.basedpyright
       pkgs.bash-language-server
@@ -93,9 +106,11 @@
       pkgs.clang-tools
       pkgs.clippy
       pkgs.delta
+      pkgs.git
       (kotlinLsp pkgs)
       pkgs.lua-language-server
       pkgs.marksman
+      pkgs.nix-update
       pkgs.nixd
       pkgs.nodejs_24
       pkgs.roslyn-ls
@@ -108,19 +123,28 @@
       pkgs.terraform-ls
       (vscodeLangservers pkgs)
       pkgs.vtsls
+      pkgs.which
       pkgs.yaml-language-server
     ];
   in {
     homeManagerModules = {
       opencode = import ./nix/opencode.nix;
-      pi-coding-agent = import ./nix/pi-coding-agent.nix;
+      pi-coding-agent = import ./nix/pi-coding-agent.nix {inherit piPackage;};
       default = self.homeManagerModules.opencode;
     };
 
     packages = forAllSystems (pkgs: {
       kotlin-lsp = kotlinLsp pkgs;
+      pi-coding-agent = piPackage pkgs;
       shell-use = shellUse pkgs;
       default = shellUse pkgs;
+    });
+
+    checks = forAllSystems (pkgs: {
+      pi-coding-agent = piPackage pkgs;
+      pi-version-sync = pkgs.runCommand "pi-version-sync" {} (
+        assert piVersionsMatch; ''touch $out''
+      );
     });
 
     devShells = forAllSystems (pkgs: {

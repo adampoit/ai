@@ -1,0 +1,87 @@
+name: ci
+
+on:
+    push:
+        branches: [master]
+    pull_request:
+    workflow_dispatch:
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+    cancel-in-progress: true
+
+permissions:
+    contents: read
+
+jobs:
+    test:
+        runs-on: ubuntu-latest
+        timeout-minutes: 90
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v7
+
+            - name: Setup Nix
+              uses: nixbuild/nix-quick-install-action@v35
+
+            - name: Configure repository cache
+              env:
+                  CACHE_URL: ${{ vars.NIX_CACHE_URL }}
+                  CACHE_KEY: ${{ vars.NIX_CACHE_PUBLIC_KEY }}
+              run: |
+                  set -euo pipefail
+                  mkdir -p ~/.config/nix
+                  if [ -n "$CACHE_URL" ]; then
+                    printf '%s\n' "extra-substituters = $CACHE_URL" >> ~/.config/nix/nix.conf
+                  fi
+                  if [ -n "$CACHE_KEY" ]; then
+                    printf '%s\n' "extra-trusted-public-keys = $CACHE_KEY" >> ~/.config/nix/nix.conf
+                  fi
+
+            - name: Install npm dependencies
+              run: nix develop -c npm ci
+
+            - name: Check formatting
+              run: nix run nixpkgs#alejandra -- --check flake.nix nix/*.nix
+
+            - name: Typecheck extensions
+              run: nix develop -c npm run typecheck
+
+            - name: Test extensions
+              run: nix develop -c npm run test:unit
+
+    build:
+        name: build (${{ matrix.name }})
+        runs-on: ${{ matrix.os }}
+        timeout-minutes: 90
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - name: linux
+                      os: ubuntu-latest
+                    - name: darwin
+                      os: macos-latest
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v7
+
+            - name: Setup Nix
+              uses: nixbuild/nix-quick-install-action@v35
+
+            - name: Configure repository cache
+              env:
+                  CACHE_URL: ${{ vars.NIX_CACHE_URL }}
+                  CACHE_KEY: ${{ vars.NIX_CACHE_PUBLIC_KEY }}
+              run: |
+                  set -euo pipefail
+                  mkdir -p ~/.config/nix
+                  if [ -n "$CACHE_URL" ]; then
+                    printf '%s\n' "extra-substituters = $CACHE_URL" >> ~/.config/nix/nix.conf
+                  fi
+                  if [ -n "$CACHE_KEY" ]; then
+                    printf '%s\n' "extra-trusted-public-keys = $CACHE_KEY" >> ~/.config/nix/nix.conf
+                  fi
+
+            - name: Build flake checks
+              run: nix flake check --print-build-logs

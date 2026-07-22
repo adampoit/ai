@@ -1301,7 +1301,7 @@ function assertCommandAvailable(command: string) {
 
 function findCommand(command: string) {
 	try {
-		const matches = execFileSync("/usr/bin/which", ["-a", command], {
+		const matches = execFileSync("which", ["-a", command], {
 			encoding: "utf8",
 		})
 			.split("\n")
