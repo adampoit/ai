@@ -134,6 +134,25 @@ test("OpenAI reads the window duration reported by the usage API", async () => {
 	}
 });
 
+test("OpenAI supports the model registry without legacy auth storage", async () => {
+	const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+	const ctx = await createContext();
+	delete (ctx.modelRegistry as { authStorage?: unknown }).authStorage;
+	ctx.modelRegistry.getAll = () => [{ provider: "openai" }];
+	process.env.PI_CODING_AGENT_DIR = ctx.cwd;
+	try {
+		const result = await openAiUsage(ctx as never);
+
+		assert.equal(result.status, "unavailable");
+	} finally {
+		if (originalAgentDir === undefined) {
+			delete process.env.PI_CODING_AGENT_DIR;
+		} else {
+			process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+		}
+	}
+});
+
 test("Copilot token-based AI credits are treated as unlimited", async () => {
 	const originalFetch = globalThis.fetch;
 	globalThis.fetch = async () =>
