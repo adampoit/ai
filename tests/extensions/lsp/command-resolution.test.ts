@@ -4,7 +4,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { LspManager } from "../../../nix/pi-coding-agent/extensions/lsp/manager.ts";
-import { commandPaths } from "../../../nix/pi-coding-agent/extensions/lsp/workspace.ts";
+import {
+	commandPaths,
+	commandVersion,
+} from "../../../nix/pi-coding-agent/extensions/lsp/workspace.ts";
 
 const unixOnly = { skip: process.platform === "win32" };
 
@@ -34,6 +37,22 @@ test(
 		});
 
 		assert.deepEqual(candidates, [first, second]);
+	},
+);
+
+test(
+	"commandVersion stops commands that do not exit",
+	{ ...unixOnly, timeout: 5_000 },
+	async (t) => {
+		const root = await mkdtemp(path.join(tmpdir(), "pi-lsp-command-test-"));
+		t.after(() => rm(root, { recursive: true, force: true }));
+		const command = await writeExecutable(
+			root,
+			"hanging-lsp",
+			"setInterval(() => {}, 1000);",
+		);
+
+		assert.equal(await commandVersion(command, root), "unknown");
 	},
 );
 

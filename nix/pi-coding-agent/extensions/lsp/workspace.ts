@@ -154,14 +154,62 @@ export async function commandVersion(
 	cwd: string,
 	signal?: AbortSignal,
 ): Promise<string> {
-	const quoted = shellQuote(command);
-	const result = await runShell(
-		cwd,
-		`${quoted} --version 2>&1 | head -n 1 || ${quoted} version 2>&1 | head -n 1`,
-		signal,
-	);
-	const version = result.stdout.trim();
-	return result.exitCode === 0 && version ? version : "unknown";
+	for (const args of [["--version"], ["version"]]) {
+		const result = await runVersionCommand(command, args, cwd, signal);
+		if (result.timedOut || signal?.aborted) return "unknown";
+		if (result.exitCode !== 0) continue;
+		const version = firstOutputLine(result.stdout, result.stderr);
+		if (version) return version;
+	}
+	return "unknown";
+}
+
+async function runVersionCommand(
+	command: string,
+	args: string[],
+	cwd: string,
+	signal?: AbortSignal,
+) {
+	return await new Promise<{
+		stdout: string;
+		stderr: string;
+		exitCode: number;
+		timedOut: boolean;
+	}>((resolve) => {
+		const proc = spawn(command, args, {
+			cwd,
+			signal,
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		let stdout = "";
+		let stderr = "";
+		let settled = false;
+		const finish = (exitCode: number, timedOut = false) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			resolve({ stdout, stderr, exitCode, timedOut });
+		};
+		const timer = setTimeout(() => {
+			proc.kill("SIGKILL");
+			finish(1, true);
+		}, 2000);
+		proc.stdout.on("data", (data) => {
+			stdout = `${stdout}${data}`.slice(0, 4096);
+		});
+		proc.stderr.on("data", (data) => {
+			stderr = `${stderr}${data}`.slice(0, 4096);
+		});
+		proc.on("error", () => finish(1));
+		proc.on("close", (code) => finish(code ?? 1));
+	});
+}
+
+function firstOutputLine(...values: string[]) {
+	return values
+		.flatMap((value) => value.split(/\r?\n/))
+		.map((line) => line.trim())
+		.find(Boolean);
 }
 
 async function runShell(cwd: string, command: string, signal?: AbortSignal) {
