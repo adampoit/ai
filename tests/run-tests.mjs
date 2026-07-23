@@ -12,6 +12,12 @@ function findTests(directory) {
 }
 
 const testFiles = findTests("tests").sort();
+const testArguments = process.argv.slice(2);
+const hasNamePattern = testArguments.some(
+	(argument) =>
+		argument === "--test-name-pattern" ||
+		argument.startsWith("--test-name-pattern="),
+);
 const result = spawnSync(
 	process.execPath,
 	[
@@ -19,7 +25,8 @@ const result = spawnSync(
 		"tsx",
 		"--test",
 		"--test-concurrency=1",
-		...process.argv.slice(2),
+		...(hasNamePattern ? ["--test-isolation=none"] : []),
+		...testArguments,
 		...testFiles,
 	],
 	{ stdio: "inherit" },

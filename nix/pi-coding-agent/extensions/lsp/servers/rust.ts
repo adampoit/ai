@@ -9,7 +9,13 @@ export const rustLspServer = {
 	initializationOptions: async () => ({
 		initializationOptions: {
 			check: {
-				command: "clippy",
+				overrideCommand: [
+					"cargo-clippy",
+					"--workspace",
+					"--message-format=json",
+					"--keep-going",
+					"--all-targets",
+				],
 			},
 		},
 	}),

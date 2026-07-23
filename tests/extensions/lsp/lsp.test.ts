@@ -1044,7 +1044,7 @@ async function assertInspect(
 	expectation: InspectionExpectation,
 ) {
 	let inspect: ToolResult | undefined;
-	for (let attempt = 0; attempt < 20; attempt++) {
+	for (let attempt = 0; attempt < 60; attempt++) {
 		inspect = await executeTool(pi, "lsp_inspect", ctx, expectation.params);
 		const hover = inspect.details?.result?.hover;
 		const hoverReady = (() => {
