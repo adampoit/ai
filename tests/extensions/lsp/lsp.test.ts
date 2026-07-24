@@ -343,6 +343,7 @@ console.log(total, broken);
 	{
 		name: "C#",
 		command: "Microsoft.CodeAnalysis.LanguageServer",
+		extraPathCommands: ["dotnet"],
 		fixtureDir: "csharp-project",
 		diagnostic: {
 			file: "Broken.cs",
@@ -423,6 +424,7 @@ public static class Broken
 				character: 13,
 			},
 			usagesInclude: "greeter.cpp",
+			minUsages: 1,
 		},
 		positionalUsages: {
 			params: { file: "src/greeter.cpp", line: 4, character: 13 },
@@ -432,6 +434,7 @@ public static class Broken
 				character: 13,
 			},
 			usagesInclude: "greeter.cpp",
+			minUsages: 1,
 		},
 		search: { query: "greet", nameStartsWith: "greet" },
 	},
@@ -830,7 +833,9 @@ setInterval(() => {}, 1000);
 
 	const oldPath = process.env.PATH;
 	const oldTerminatedFile = process.env.PI_FAKE_LSP_TERMINATED;
-	process.env.PATH = `${bin}${path.delimiter}${oldPath ?? ""}`;
+	process.env.PATH = [bin, path.dirname(process.execPath)].join(
+		path.delimiter,
+	);
 	process.env.PI_FAKE_LSP_TERMINATED = terminatedFile;
 	try {
 		const pi = loadExtension();
@@ -904,7 +909,12 @@ test("lsp command renders project detection reasons", async () => {
 	assert.ok(output.includes("detected because of src/index.ts"), output);
 });
 
-for (const languageCase of languageCases) {
+const supportedLanguageCases = languageCases.filter(
+	(languageCase) =>
+		languageCase.name !== "Swift" || process.platform === "darwin",
+);
+
+for (const languageCase of supportedLanguageCases) {
 	test(`lsp extension tools execute against a ${languageCase.name} toy project`, async () => {
 		assertCommandAvailable(languageCase.command);
 
@@ -1035,7 +1045,7 @@ async function assertInspect(
 	expectation: InspectionExpectation,
 ) {
 	let inspect: ToolResult | undefined;
-	for (let attempt = 0; attempt < 20; attempt++) {
+	for (let attempt = 0; attempt < 60; attempt++) {
 		inspect = await executeTool(pi, "lsp_inspect", ctx, expectation.params);
 		const hover = inspect.details?.result?.hover;
 		const hoverReady = (() => {
@@ -1046,13 +1056,19 @@ async function assertInspect(
 				hover?.result !== undefined
 			);
 		})();
+		const definitionReady = expectation.definitionIncludes
+			? jsonIncludes(
+					inspect.details?.result?.definition,
+					expectation.definitionIncludes,
+				)
+			: true;
 		const usagesReady = expectation.usagesInclude
 			? jsonIncludes(
 					inspect.details?.result?.usages,
 					expectation.usagesInclude,
 				)
 			: true;
-		if (hoverReady && usagesReady) break;
+		if (hoverReady && definitionReady && usagesReady) break;
 		await new Promise((resolve) => setTimeout(resolve, 500));
 	}
 	assert.ok(inspect);
@@ -1301,7 +1317,7 @@ function assertCommandAvailable(command: string) {
 
 function findCommand(command: string) {
 	try {
-		const matches = execFileSync("/usr/bin/which", ["-a", command], {
+		const matches = execFileSync("which", ["-a", command], {
 			encoding: "utf8",
 		})
 			.split("\n")

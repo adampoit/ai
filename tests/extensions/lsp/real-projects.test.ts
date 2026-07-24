@@ -194,6 +194,7 @@ const realProjectCases: RealProjectCase[] = [
 		server: "Microsoft.CodeAnalysis.LanguageServer",
 		language: "C#",
 		command: "Microsoft.CodeAnalysis.LanguageServer",
+		extraPathCommands: ["dotnet"],
 		project: "JamesNK/Newtonsoft.Json",
 		repo: "https://github.com/JamesNK/Newtonsoft.Json.git",
 		sha: "4f73e74372445108d2c1bda37b36e6f5e43402e0",
@@ -376,11 +377,16 @@ const realProjectCases: RealProjectCase[] = [
 	},
 ];
 
+const supportedRealProjectCases = realProjectCases.filter(
+	(projectCase) =>
+		projectCase.language !== "Swift" || process.platform === "darwin",
+);
+
 test(
 	"lsp extension tools execute against fixed real open source projects",
 	{ timeout: 900_000 },
 	async (t) => {
-		for (const projectCase of realProjectCases) {
+		for (const projectCase of supportedRealProjectCases) {
 			await t.test(
 				`${projectCase.server} on ${projectCase.project}`,
 				{ timeout: 180_000 },
@@ -633,7 +639,7 @@ function assertCommandAvailable(command: string) {
 
 function findCommand(command: string) {
 	try {
-		const matches = execFileSync("/usr/bin/which", ["-a", command], {
+		const matches = execFileSync("which", ["-a", command], {
 			encoding: "utf8",
 		})
 			.split("\n")

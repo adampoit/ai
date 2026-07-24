@@ -47,7 +47,7 @@ home-manager.sharedModules = [
 ];
 ```
 
-The Pi package defaults to pinned version `0.75.4`, which avoids the current nixpkgs Darwin build failure in `0.78.0`. Customize models with the upstream module setting:
+The module uses the Pi package pinned and tested in this repository so runtime and extension updates remain synchronized. Customize models with the upstream module setting:
 
 ```nix
 programs.pi-coding-agent.settings.enabledModels = [
@@ -76,9 +76,17 @@ nix-instantiate --parse ./nix/pi-coding-agent.nix
 For Pi TypeScript extension edits, run typechecking and tests from the dev shell so the expected language servers are available:
 
 ```bash
+nix develop -c npm ci
 nix develop -c npm run typecheck
 nix develop -c npm test
+nix flake check
 ```
+
+The four Pi npm development dependencies must match the version in `nix/pi-coding-agent-source.nix`; `nix flake check` enforces this and builds the pinned runtime package.
+
+## Pi Updates
+
+The scheduled `update-pi` GitHub Actions workflow uses `nix-update` to update the runtime source and dependency hashes, synchronizes the four npm development dependencies, validates the result, and opens a pull request. It can also be run manually with an explicit version from the Actions UI.
 
 ## License
 
