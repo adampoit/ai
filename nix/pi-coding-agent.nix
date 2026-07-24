@@ -7,11 +7,13 @@
   piCfg = config.programs.pi-coding-agent;
   piAgentSource = ./pi-coding-agent;
   kotlinLsp = pkgs.callPackage ./kotlin-lsp.nix {};
+  xtermHeadless = pkgs.callPackage ./xterm-headless.nix {};
 
   piAgentDir = pkgs.runCommand "pi-agent-dir" {} ''
-    mkdir -p $out
+    mkdir -p $out/node_modules/@xterm
     cp -R ${piAgentSource}/components $out/components
     cp -R ${piAgentSource}/extensions $out/extensions
+    cp -R ${xtermHeadless} $out/node_modules/@xterm/headless
   '';
 
   vscodeLangservers = pkgs.runCommand "vscode-langservers-extracted-node22" {} ''
@@ -244,6 +246,7 @@ in {
       "${piCfg.configDir}/themes/gruvbox.json".text = builtins.toJSON gruvboxTheme;
       "${piCfg.configDir}/components".source = piAgentDir + "/components";
       "${piCfg.configDir}/extensions".source = piAgentDir + "/extensions";
+      "${piCfg.configDir}/node_modules/@xterm/headless".source = xtermHeadless;
       "${piCfg.configDir}/skills".source = piSkills;
       "${piCfg.configDir}/prompts".source = ../prompts;
     };

@@ -99,6 +99,7 @@
       builtins.all
       (package: packageJson.devDependencies.${package} == piVersion)
       piNpmPackages;
+    xtermHeadless = pkgs: pkgs.callPackage ./nix/xterm-headless.nix {};
     lspTestPackages = pkgs: [
       pkgs.basedpyright
       pkgs.bash-language-server
@@ -138,6 +139,7 @@
       kotlin-lsp = kotlinLsp pkgs;
       pi-coding-agent = piPackage pkgs;
       shell-use = shellUse pkgs;
+      xterm-headless = xtermHeadless pkgs;
       default = shellUse pkgs;
     });
 

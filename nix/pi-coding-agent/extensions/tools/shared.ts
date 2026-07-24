@@ -1,3 +1,4 @@
+import { stripVTControlCharacters } from "node:util";
 import type {
 	AgentToolResult,
 	Theme,
@@ -27,16 +28,24 @@ export type SkinState<TDetails> = {
 export type SkinRenderContext = {
 	executionStarted: boolean;
 	expanded: boolean;
+	invalidate(): void;
 };
 
-export function textOutput(result: AgentToolResult<any> | undefined): string {
+export function rawTextOutput(
+	result: AgentToolResult<any> | undefined,
+): string {
 	return (
 		result?.content
 			.filter((item) => item.type === "text")
 			.map((item) => item.text ?? "")
-			.join("\n")
-			.trimEnd() ?? ""
+			.join("\n") ?? ""
 	);
+}
+
+export function textOutput(result: AgentToolResult<any> | undefined): string {
+	return stripVTControlCharacters(rawTextOutput(result))
+		.replace(/\r/g, "")
+		.trimEnd();
 }
 
 export function pendingText(started: boolean): string {

@@ -3,6 +3,8 @@ import {
 	highlightCode,
 	keyText,
 } from "@earendil-works/pi-coding-agent";
+import type { Terminal as XtermTerminal } from "@xterm/headless";
+import { createRequire } from "node:module";
 import type { Component } from "@earendil-works/pi-tui";
 import {
 	truncateToWidth,
@@ -798,32 +800,55 @@ export type TerminalPaneOptions = {
 	accent?: ColorSpec;
 	background?: ColorSpec;
 	theme?: PiThemeLike;
+	requestRender?: () => void;
 };
+
+const require = createRequire(import.meta.url);
+const { Terminal } =
+	require("@xterm/headless") as typeof import("@xterm/headless");
+const TERMINAL_ROWS = 24;
+const TERMINAL_SCROLLBACK = 50_000;
+type XtermBuffer = XtermTerminal["buffer"]["active"];
+type XtermBufferLine = NonNullable<ReturnType<XtermBuffer["getLine"]>>;
+type XtermBufferCell = NonNullable<ReturnType<XtermBufferLine["getCell"]>>;
 
 export class TerminalPane
 	extends CachedComponent
 	implements ExpansionAwareComponent
 {
+	private terminal?: XtermTerminal;
 	private outputLines: string[] = [];
+	private outputLineCount = 0;
+	private queuedOutput = "";
+	private generation = 0;
 
 	constructor(private options: TerminalPaneOptions) {
 		super();
-		this.outputLines = splitLines(this.options.output ?? "");
 	}
 
 	setOptions(options: TerminalPaneOptions): void {
+		const outputChanged = options.output !== this.options.output;
+		const lineLimitChanged =
+			options.maxLines !== this.options.maxLines ||
+			options.expansionLimit !== this.options.expansionLimit;
 		this.options = options;
-		this.outputLines = splitLines(this.options.output ?? "");
+		if (outputChanged) this.queueOutput();
+		else if (lineLimitChanged) this.readBuffer();
 		this.invalidate();
 	}
 
 	hasExpandableContent(): boolean {
 		const limit = this.options.expansionLimit ?? this.options.maxLines;
-		return limit !== undefined && this.outputLines.length > limit;
+		const sourceLineCount = splitLines(this.options.output ?? "").length;
+		return (
+			limit !== undefined &&
+			Math.max(this.outputLineCount, sourceLineCount) > limit
+		);
 	}
 
 	protected doRender(width: number): string[] {
 		if (width <= 0) return [];
+		this.ensureTerminal(width);
 		const bg = this.options.background
 			? paintBackground(this.options.background, this.options.theme)
 			: undefined;
@@ -838,12 +863,12 @@ export class TerminalPane
 
 		const maxLines = Math.max(
 			0,
-			this.options.maxLines ?? this.outputLines.length,
+			this.options.maxLines ?? this.outputLineCount,
 		);
-		if (this.outputLines.length > maxLines) {
+		if (this.outputLineCount > maxLines) {
 			lines.push(
 				styleText(
-					`… ${this.outputLines.length - maxLines} previous output lines`,
+					`… ${this.outputLineCount - maxLines} previous output lines`,
 					{
 						fg: gruvbox.gray,
 						theme: this.options.theme,
@@ -857,6 +882,143 @@ export class TerminalPane
 
 		return lines.map((line) => fillAnsiLine(line, width, bg));
 	}
+
+	private ensureTerminal(width: number): void {
+		if (!this.terminal) {
+			this.resetTerminal(width);
+			return;
+		}
+		if (this.terminal.cols === width) return;
+		this.terminal.resize(width, TERMINAL_ROWS);
+		this.readBuffer();
+	}
+
+	private resetTerminal(width: number): void {
+		this.generation++;
+		this.terminal?.dispose();
+		this.terminal = new Terminal({
+			allowProposedApi: true,
+			cols: width,
+			rows: TERMINAL_ROWS,
+			convertEol: true,
+			disableStdin: true,
+			logLevel: "off",
+			scrollback: TERMINAL_SCROLLBACK,
+		});
+		this.outputLines = [];
+		this.outputLineCount = 0;
+		this.queuedOutput = "";
+		this.queueOutput();
+	}
+
+	private queueOutput(): void {
+		if (!this.terminal) return;
+		const output = this.options.output ?? "";
+		if (!output.startsWith(this.queuedOutput)) {
+			this.resetTerminal(this.terminal.cols);
+			return;
+		}
+		const addition = output.slice(this.queuedOutput.length);
+		if (!addition) return;
+
+		this.queuedOutput = output;
+		const generation = this.generation;
+		this.terminal.write(addition, () => {
+			if (generation !== this.generation) return;
+			this.readBuffer();
+			this.invalidate();
+			this.options.requestRender?.();
+		});
+	}
+
+	private readBuffer(): void {
+		if (!this.terminal) return;
+		const buffer = this.terminal.buffer.active;
+		let outputLineCount = buffer.length;
+		while (outputLineCount > 0) {
+			const line = buffer.getLine(outputLineCount - 1);
+			if (line && renderXtermLine(line)) break;
+			outputLineCount--;
+		}
+
+		const retainedLineCount = Math.max(
+			this.options.maxLines ?? outputLineCount,
+			this.options.expansionLimit ?? 0,
+		);
+		const firstRow = Math.max(0, outputLineCount - retainedLineCount);
+		const lines: string[] = [];
+		for (let row = firstRow; row < outputLineCount; row++) {
+			const line = buffer.getLine(row);
+			lines.push(line ? renderXtermLine(line) : "");
+		}
+		this.outputLineCount = outputLineCount;
+		this.outputLines = lines;
+	}
+}
+
+function renderXtermLine(line: XtermBufferLine): string {
+	let lastColumn = 0;
+	for (let column = 0; column < line.length; column++) {
+		const cell = line.getCell(column);
+		if (!cell || cell.getWidth() === 0) continue;
+		if (cell.getChars() || !cell.isAttributeDefault()) {
+			lastColumn = column + cell.getWidth();
+		}
+	}
+
+	let output = "";
+	for (let column = 0; column < lastColumn; column++) {
+		const cell = line.getCell(column);
+		if (!cell || cell.getWidth() === 0) continue;
+		const text = cell.getChars() || " ".repeat(cell.getWidth());
+		const sgr = xtermCellSgr(cell);
+		output += sgr ? `\x1b[${sgr}m${text}\x1b[0m` : text;
+	}
+	return output;
+}
+
+function xtermCellSgr(cell: XtermBufferCell): string {
+	const codes: string[] = [];
+	if (cell.isBold()) codes.push("1");
+	if (cell.isDim()) codes.push("2");
+	if (cell.isItalic()) codes.push("3");
+	if (cell.isUnderline()) codes.push("4");
+	if (cell.isBlink()) codes.push("5");
+	if (cell.isInverse()) codes.push("7");
+	if (cell.isInvisible()) codes.push("8");
+	if (cell.isStrikethrough()) codes.push("9");
+	if (cell.isOverline()) codes.push("53");
+	appendXtermColor(codes, cell, "foreground");
+	appendXtermColor(codes, cell, "background");
+	return codes.join(";");
+}
+
+function appendXtermColor(
+	codes: string[],
+	cell: XtermBufferCell,
+	kind: "foreground" | "background",
+): void {
+	const foreground = kind === "foreground";
+	const isDefault = foreground ? cell.isFgDefault() : cell.isBgDefault();
+	if (isDefault) return;
+
+	const color = foreground ? cell.getFgColor() : cell.getBgColor();
+	const isRgb = foreground ? cell.isFgRGB() : cell.isBgRGB();
+	if (isRgb) {
+		codes.push(
+			foreground ? "38" : "48",
+			"2",
+			String((color >> 16) & 0xff),
+			String((color >> 8) & 0xff),
+			String(color & 0xff),
+		);
+		return;
+	}
+
+	if (color < 8) codes.push(String((foreground ? 30 : 40) + color));
+	else if (color < 16)
+		codes.push(String((foreground ? 90 : 100) + color - 8));
+	else codes.push(foreground ? "38" : "48", "5", String(color));
 }
 
 export type KeyHint = {
