@@ -57,6 +57,71 @@ test(
 );
 
 test(
+	"an initialized LSP server outlives its startup signal",
+	unixOnly,
+	async (t) => {
+		const root = await mkdtemp(path.join(tmpdir(), "pi-lsp-command-test-"));
+		t.after(() => rm(root, { recursive: true, force: true }));
+		await writeFile(
+			path.join(root, "main.ts"),
+			"export const value = 1;\n",
+		);
+		const bin = path.join(root, "bin");
+		await writeExecutable(bin, "vtsls", workingLspServerSource());
+		const oldPath = process.env.PATH;
+		process.env.PATH = bin;
+		const manager = new LspManager(root);
+		t.after(async () => {
+			process.env.PATH = oldPath;
+			await manager.stop();
+		});
+		const controller = new AbortController();
+
+		const result = await manager.requestDocumentSymbols(
+			"main.ts",
+			controller.signal,
+		);
+		assert.equal(result.ok, true);
+		controller.abort();
+		await new Promise((resolve) => setTimeout(resolve, 50));
+
+		const entry = (await manager.getEntries()).find((candidate) =>
+			candidate.text.startsWith("- typescript"),
+		);
+		assert.equal(entry?.on, true, entry?.text);
+	},
+);
+
+test(
+	"LSP requests retry transient content-modified responses",
+	unixOnly,
+	async (t) => {
+		const root = await mkdtemp(path.join(tmpdir(), "pi-lsp-command-test-"));
+		t.after(() => rm(root, { recursive: true, force: true }));
+		await writeFile(
+			path.join(root, "main.ts"),
+			"export const value = 1;\n",
+		);
+		const bin = path.join(root, "bin");
+		await writeExecutable(bin, "vtsls", workingLspServerSource());
+		const oldPath = process.env.PATH;
+		process.env.PATH = bin;
+		const manager = new LspManager(root);
+		t.after(async () => {
+			process.env.PATH = oldPath;
+			await manager.stop();
+		});
+
+		const result = await manager.requestAtPosition(
+			{ file: "main.ts", line: 1, character: 14 },
+			"textDocument/references",
+		);
+
+		assert.deepEqual(result, { ok: true, result: [] });
+	},
+);
+
+test(
 	"LSP startup falls back to a later working executable",
 	unixOnly,
 	async (t) => {
@@ -160,6 +225,7 @@ if (process.argv.includes("--version")) {
 	process.exit(0);
 }
 let buffer = Buffer.alloc(0);
+let referenceRequests = 0;
 function send(message) {
 	const body = Buffer.from(JSON.stringify(message));
 	process.stdout.write(\`Content-Length: \${body.length}\\r\\n\\r\\n\`);
@@ -170,6 +236,12 @@ function handle(message) {
 		send({ jsonrpc: "2.0", id: message.id, result: { capabilities: { documentSymbolProvider: true } } });
 	} else if (message.method === "textDocument/documentSymbol") {
 		send({ jsonrpc: "2.0", id: message.id, result: [] });
+	} else if (message.method === "textDocument/references") {
+		if (referenceRequests++ === 0) {
+			send({ jsonrpc: "2.0", id: message.id, error: { code: -32801, message: "content modified" } });
+		} else {
+			send({ jsonrpc: "2.0", id: message.id, result: [] });
+		}
 	} else if (message.method === "shutdown") {
 		send({ jsonrpc: "2.0", id: message.id, result: null });
 	}

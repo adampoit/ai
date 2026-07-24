@@ -107,6 +107,28 @@ function summarizeServerFailure(error: unknown): string {
 	return lines.length > 6 ? `${summary}; …` : summary;
 }
 
+async function requestWithContentModifiedRetry<T>(
+	request: () => Promise<T>,
+	signal?: AbortSignal,
+): Promise<T> {
+	for (let attempt = 0; ; attempt++) {
+		try {
+			return await request();
+		} catch (error) {
+			const message =
+				error instanceof Error ? error.message : String(error);
+			if (
+				attempt >= 2 ||
+				(!message.includes('"code":-32801') &&
+					!message.toLowerCase().includes("content modified"))
+			)
+				throw error;
+			signal?.throwIfAborted();
+			await delay(100 * (attempt + 1), signal);
+		}
+	}
+}
+
 export function getManager(
 	cwd: string,
 	manager: LspManager | undefined,
@@ -362,14 +384,18 @@ export class LspManager {
 			signal,
 			async (client, textDocument) => {
 				await client.waitForProjectInitialization();
-				const result = await client.request(method, {
-					textDocument: { uri: textDocument.uri },
-					position: {
-						line: params.line - 1,
-						character: params.character - 1,
-					},
-					...extraParams,
-				});
+				const result = await requestWithContentModifiedRetry(
+					() =>
+						client.request(method, {
+							textDocument: { uri: textDocument.uri },
+							position: {
+								line: params.line - 1,
+								character: params.character - 1,
+							},
+							...extraParams,
+						}),
+					signal,
+				);
 				return { ok: true, result };
 			},
 		);
@@ -384,11 +410,12 @@ export class LspManager {
 			signal,
 			async (client, textDocument) => {
 				await client.waitForProjectInitialization();
-				const symbols = await client.request(
-					"textDocument/documentSymbol",
-					{
-						textDocument: { uri: textDocument.uri },
-					},
+				const symbols = await requestWithContentModifiedRetry(
+					() =>
+						client.request("textDocument/documentSymbol", {
+							textDocument: { uri: textDocument.uri },
+						}),
+					signal,
 				);
 				return { ok: true, symbols };
 			},
@@ -584,12 +611,7 @@ export class LspManager {
 
 		const failures: string[] = [];
 		for (const executablePath of executablePaths) {
-			const client = new LspClient(
-				this.cwd,
-				config,
-				signal,
-				executablePath,
-			);
+			const client = new LspClient(this.cwd, config, executablePath);
 			client.onNotification = (method, params) => {
 				if (method !== "textDocument/publishDiagnostics") return;
 				const value = params as {
@@ -615,6 +637,7 @@ export class LspManager {
 					client,
 					config,
 					defaultCapabilities(),
+					signal,
 				);
 				this.clients.set(key, client);
 				this.updateStatus();

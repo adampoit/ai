@@ -33,33 +33,48 @@ export class LspClient {
 	private serverCapabilities: unknown;
 	private stderr = "";
 
+	private clearStartupAbort?: () => void;
+
 	constructor(
 		private cwd: string,
 		private config: ServerConfig,
-		private signal?: AbortSignal,
 		readonly executablePath = config.command,
 	) {
 		this.name = config.command;
 		this.projectInitialized = config.isProjectInitialized ?? true;
 	}
 
-	async start() {
+	async start(signal?: AbortSignal) {
 		if (this.started) return;
-		this.started = true;
+		signal?.throwIfAborted();
 		const processCwd = await lspProcessDirectory(this.config, this.cwd);
 		const env = await lspProcessEnvironment(
 			this.config,
 			this.cwd,
 			processCwd,
-			this.signal,
+			signal,
 		);
+		signal?.throwIfAborted();
+		this.started = true;
 		const proc = spawn(this.executablePath, this.config.args, {
 			cwd: processCwd,
 			detached: process.platform !== "win32",
-			signal: this.signal,
 			env,
 		});
 		this.proc = proc;
+		if (signal) {
+			const abortStartup = () => {
+				killProcessGroup(proc, "SIGTERM");
+				this.markProcessStopped(
+					proc,
+					new Error(`${this.config.command} startup aborted`),
+				);
+			};
+			signal.addEventListener("abort", abortStartup, { once: true });
+			this.clearStartupAbort = () =>
+				signal.removeEventListener("abort", abortStartup);
+			if (signal.aborted) abortStartup();
+		}
 		proc.stdout.on("data", (chunk: Buffer) => this.read(chunk));
 		proc.stderr.on("data", (chunk: Buffer) => {
 			this.stderr = `${this.stderr}${chunk.toString("utf8")}`.slice(
@@ -127,6 +142,11 @@ export class LspClient {
 			this.proc = undefined;
 			this.started = false;
 		}
+	}
+
+	completeStartup() {
+		this.clearStartupAbort?.();
+		this.clearStartupAbort = undefined;
 	}
 
 	setServerCapabilities(capabilities: unknown) {
@@ -252,6 +272,7 @@ export class LspClient {
 		error: Error,
 	) {
 		if (this.proc !== proc) return;
+		this.completeStartup();
 		this.proc = undefined;
 		this.started = false;
 		this.rejectAll(error);
@@ -286,8 +307,9 @@ export async function initializeClient(
 	client: LspClient,
 	config: ServerConfig,
 	capabilities: Record<string, unknown>,
+	signal?: AbortSignal,
 ) {
-	await client.start();
+	await client.start(signal);
 	const rootUri = pathToFileURL(cwd).toString();
 	const init = (await client.request(
 		"initialize",
@@ -309,6 +331,7 @@ export async function initializeClient(
 	)) as { capabilities?: unknown };
 	client.setServerCapabilities(init.capabilities);
 	client.notify("initialized", {});
+	client.completeStartup();
 }
 
 function killProcessGroup(
