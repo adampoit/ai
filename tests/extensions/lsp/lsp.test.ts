@@ -343,6 +343,7 @@ console.log(total, broken);
 	{
 		name: "C#",
 		command: "Microsoft.CodeAnalysis.LanguageServer",
+		extraPathCommands: ["dotnet"],
 		fixtureDir: "csharp-project",
 		diagnostic: {
 			file: "Broken.cs",

@@ -106,6 +106,7 @@
       pkgs.clang-tools
       pkgs.clippy
       pkgs.delta
+      pkgs.dotnet-sdk_9
       pkgs.git
       (kotlinLsp pkgs)
       pkgs.lua-language-server

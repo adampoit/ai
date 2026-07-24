@@ -194,6 +194,7 @@ const realProjectCases: RealProjectCase[] = [
 		server: "Microsoft.CodeAnalysis.LanguageServer",
 		language: "C#",
 		command: "Microsoft.CodeAnalysis.LanguageServer",
+		extraPathCommands: ["dotnet"],
 		project: "JamesNK/Newtonsoft.Json",
 		repo: "https://github.com/JamesNK/Newtonsoft.Json.git",
 		sha: "4f73e74372445108d2c1bda37b36e6f5e43402e0",
