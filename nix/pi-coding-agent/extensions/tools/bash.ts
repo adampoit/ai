@@ -19,6 +19,7 @@ import {
 	displayPath,
 	isExpanded,
 	pendingText,
+	rawTextOutput,
 	safeString,
 	textOutput,
 	type ResultInfo,
@@ -30,6 +31,7 @@ const COLLAPSED_BASH_LINES = 14;
 
 type BashSkinState = SkinState<BashToolDetails | undefined> & {
 	elapsedTimer?: ReturnType<typeof setInterval>;
+	terminalPane?: TerminalPane;
 };
 
 function stopElapsedTimer(state: BashSkinState): void {
@@ -63,13 +65,14 @@ function buildBashPresentation(
 	info: ResultInfo<BashToolDetails | undefined> | undefined,
 	theme: Theme,
 	context: SkinRenderContext,
-	timingState?: SkinState<BashToolDetails | undefined>,
+	timingState?: BashSkinState,
 ): ToolPresentationModel {
 	const command = safeString(args.command);
+	const plainOutput = textOutput(info?.result);
 	const output =
-		textOutput(info?.result) || pendingText(context.executionStarted);
-	const lineCount = countLines(output);
-	const exitCode = parseExitCode(output);
+		rawTextOutput(info?.result) || pendingText(context.executionStarted);
+	const lineCount = countLines(plainOutput || output);
+	const exitCode = parseExitCode(plainOutput);
 	const isPending = !info || info.options.isPartial;
 	const state = info?.isError ? "error" : isPending ? "pending" : "success";
 	const status = info?.isError
@@ -109,6 +112,18 @@ function buildBashPresentation(
 			bg: gruvbox.bg1,
 		});
 
+	const terminalPane =
+		timingState?.terminalPane ?? new TerminalPane({ output: "" });
+	if (timingState) timingState.terminalPane = terminalPane;
+	terminalPane.setOptions({
+		output,
+		maxLines: expanded ? 120 : COLLAPSED_BASH_LINES,
+		expansionLimit: COLLAPSED_BASH_LINES,
+		accent: gruvbox.orange,
+		theme,
+		requestRender: () => context.invalidate(),
+	});
+
 	return {
 		title: "bash",
 		icon: "",
@@ -128,13 +143,7 @@ function buildBashPresentation(
 		telemetry,
 		expansion: { expanded },
 		theme,
-		children: new TerminalPane({
-			output,
-			maxLines: expanded ? 120 : COLLAPSED_BASH_LINES,
-			expansionLimit: COLLAPSED_BASH_LINES,
-			accent: gruvbox.orange,
-			theme,
-		}),
+		children: terminalPane,
 	};
 }
 

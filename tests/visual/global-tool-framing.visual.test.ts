@@ -260,6 +260,36 @@ test(
 		);
 
 		await t.test(
+			"bash replaces output from a continuously updating progress app",
+			async () => {
+				const sessionHome = await mkdtemp(
+					join(tmpdir(), "pi-tool-frame-progress-"),
+				);
+				await installTheme(sessionHome);
+				const shell = await runFixture(
+					sessionHome,
+					"fixture:bash-progress",
+					80,
+				);
+				try {
+					await shell.waitText("⠋ 10%", { timeout: 10_000 });
+					await shell.waitText("fixture complete", {
+						timeout: 15_000,
+					});
+					const frame = extractToolFrame(
+						await shell.text({ full: true }),
+						"bash",
+					);
+					assert.match(frame, /Downloading assets/);
+					assert.match(frame, /✓ complete/);
+					assert.doesNotMatch(frame, /\n│  [⠋⠙]/);
+				} finally {
+					await shell.close();
+				}
+			},
+		);
+
+		await t.test(
 			"actual pi-web-access renderer receives the generic frame",
 			async () => {
 				const sessionHome = await mkdtemp(

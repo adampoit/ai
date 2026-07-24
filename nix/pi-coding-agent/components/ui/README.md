@@ -11,6 +11,7 @@ Small, local TUI primitives for Pi extensions.
 - `powerline.ts`: lualine/powerline-inspired status-line segments.
 - `blocks.ts`: framed blocks, panes, badges, invocation lines, and `ToolShell`.
 - `tool-presentation.ts`: the declarative `ToolPresentation` marker used by tool renderers.
+- `TerminalPane` in `blocks.ts`: an xterm.js-backed viewport for shell output and in-place progress updates.
 
 ## Tool rendering responsibilities
 

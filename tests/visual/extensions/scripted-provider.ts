@@ -32,6 +32,13 @@ const scenarios: Record<
 			timeout: 10,
 		},
 	},
+	"fixture:bash-progress": {
+		name: "bash",
+		arguments: {
+			command: `node -e 'const frames = ["⠋ 10%", "⠙ 60%", "✓ complete"]; let index = 0; process.stdout.write("Downloading assets\\n\\u001b[?25l"); const timer = setInterval(() => { process.stdout.write("\\r\\u001b[2K" + frames[index++]); if (index === frames.length) { clearInterval(timer); process.stdout.write("\\u001b[?25h\\n"); } }, 500);'`,
+			timeout: 10,
+		},
+	},
 	"fixture:edit-success": {
 		name: "edit",
 		arguments: {
