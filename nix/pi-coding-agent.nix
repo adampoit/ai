@@ -74,6 +74,7 @@
     pkgs.sqlfluff
     pkgs.stylua
     pkgs.swiftlint
+    pkgs.taskwarrior3
     pkgs.terraform
     pkgs.terraform-ls
     vscodeLangservers

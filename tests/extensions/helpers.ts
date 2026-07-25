@@ -12,6 +12,11 @@ export type Command = {
 	handler?: (args: string, ctx: TestExtensionContext) => unknown;
 };
 
+export type Shortcut = {
+	description?: string;
+	handler?: (ctx: TestExtensionContext) => unknown;
+};
+
 export type RegisteredTool = {
 	name: string;
 	description?: string;
@@ -86,6 +91,7 @@ export type TestExtensionContext = {
 		custom: <T>(factory: unknown, options?: unknown) => Promise<T>;
 		confirm: () => Promise<boolean>;
 		input: () => Promise<string | undefined>;
+		getEditorText: () => string;
 		setEditorText: (text: string) => void;
 	};
 	statuses: Array<[string, string | undefined]>;
@@ -100,6 +106,7 @@ export class FakePi {
 
 	readonly tools = new Map<string, RegisteredTool>();
 	readonly commands = new Map<string, Command>();
+	readonly shortcuts = new Map<string, Shortcut>();
 	readonly renderers = new Map<string, unknown>();
 	readonly handlers = new Map<
 		string,
@@ -118,6 +125,10 @@ export class FakePi {
 
 	registerCommand(name: string, command: Command) {
 		this.commands.set(name, command);
+	}
+
+	registerShortcut(shortcut: string, options: Shortcut) {
+		this.shortcuts.set(shortcut, options);
 	}
 
 	registerMessageRenderer(customType: string, renderer: unknown) {
@@ -261,6 +272,7 @@ export async function createContext(
 			custom: async () => undefined as never,
 			confirm: async () => false,
 			input: async () => undefined,
+			getEditorText: () => ctx.editorText ?? "",
 			setEditorText: (text) => {
 				ctx.editorText = text;
 			},
@@ -289,9 +301,15 @@ export async function runCommand(
 
 export function assertPublicSurface(
 	pi: FakePi,
-	expected: { tools?: string[]; commands?: string[]; handlers?: string[] },
+	expected: {
+		tools?: string[];
+		commands?: string[];
+		shortcuts?: string[];
+		handlers?: string[];
+	},
 ) {
 	assert.deepEqual([...pi.tools.keys()].sort(), expected.tools ?? []);
 	assert.deepEqual([...pi.commands.keys()].sort(), expected.commands ?? []);
+	assert.deepEqual([...pi.shortcuts.keys()].sort(), expected.shortcuts ?? []);
 	assert.deepEqual([...pi.handlers.keys()].sort(), expected.handlers ?? []);
 }
