@@ -119,6 +119,23 @@ test("task command rejects filters instead of passing them to Taskwarrior", asyn
 	});
 });
 
+test("task command reports malformed JSON details", async () => {
+	const pi = loadExtension(taskwarriorExtension, () => ({
+		code: 0,
+		stdout: "{malformed",
+		stderr: "",
+	}));
+	const ctx = await createContext();
+
+	await runCommand(pi, "task", "", ctx);
+
+	assert.match(
+		ctx.notifications.at(-1)?.message ?? "",
+		/Unable to load Taskwarrior tasks: Taskwarrior returned invalid JSON: .+/,
+	);
+	assert.equal(ctx.notifications.at(-1)?.level, "error");
+});
+
 test("formatTaskContext makes missing notes explicit", () => {
 	const context = formatTaskContext({
 		id: 7,

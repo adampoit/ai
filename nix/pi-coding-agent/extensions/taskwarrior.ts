@@ -191,8 +191,10 @@ async function loadTasks(
 
 	try {
 		return parseTasks(result.stdout);
-	} catch {
-		throw new Error("Taskwarrior returned invalid JSON");
+	} catch (error) {
+		throw new Error(
+			`Taskwarrior returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+		);
 	}
 }
 
