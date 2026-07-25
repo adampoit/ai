@@ -23,6 +23,8 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 const storePath = join(homedir(), ".pi", "agent", "jj-checkpoints.json");
+const mutatingTools = new Set(["bash", "edit", "write"]);
+const repoRootCache = new Map<string, string | undefined>();
 const maxCheckpointsPerRepo = 200;
 
 type Checkpoint = {
@@ -72,9 +74,12 @@ async function getRepoRoot(
 	cwd: string,
 	ctx?: ExtensionContext,
 ): Promise<string | undefined> {
-	const result = await runJj(pi, cwd, ["root"], ctx);
-	if (result.code !== 0) return undefined;
-	return result.stdout.trim() || undefined;
+	if (repoRootCache.has(cwd)) return repoRootCache.get(cwd);
+	const result = await runJj(pi, cwd, ["root", "--ignore-working-copy"], ctx);
+	const root =
+		result.code === 0 ? result.stdout.trim() || undefined : undefined;
+	repoRootCache.set(cwd, root);
+	return root;
 }
 
 async function getCurrentOp(
@@ -663,6 +668,7 @@ async function restoreCheckpoint(
 
 export default function (pi: ExtensionAPI) {
 	pi.on("tool_call", async (event, ctx) => {
+		if (!mutatingTools.has(event.toolName)) return;
 		await createCheckpoint(pi, ctx, event);
 	});
 
