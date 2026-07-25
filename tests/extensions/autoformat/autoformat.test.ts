@@ -69,6 +69,7 @@ test("autoformat extension registers its public surface", () => {
 	assertPublicSurface(pi, {
 		commands: ["formatters"],
 		handlers: [
+			"context",
 			"session_shutdown",
 			"session_start",
 			"tool_result",
@@ -150,6 +151,49 @@ test("autoformat formats modified files at turn end", async () => {
 		message: "Autoformatted 1 file: package.json (prettier)",
 		level: "info",
 	});
+});
+
+test("autoformat injects sweep results into the next existing model context", async () => {
+	const pi = loadExtension(autoformatExtension, createAutoformatExec());
+	const ctx = await createContext();
+	const file = `${ctx.cwd}/package.json`;
+	await writeFile(file, '{"b":2,"a":1}\n');
+	await pi.emit("turn_end", { turnIndex: 0 }, ctx);
+	const context = {
+		messages: [
+			{ role: "user", content: "continue", timestamp: Date.now() },
+		],
+	};
+
+	await pi.emit("context", context, ctx);
+
+	const notice = context.messages.at(-1) as any;
+	assert.equal(notice.role, "custom");
+	assert.equal(notice.customType, "autoformat");
+	assert.equal(notice.display, false);
+	assert.ok(notice.content.includes("package.json (prettier)"));
+	assert.ok(notice.content.includes("Re-read them before exact edits"));
+	assert.deepEqual(pi.sentMessages, []);
+});
+
+test("autoformat keeps sweep context through retries and clears it after a model turn", async () => {
+	const pi = loadExtension(autoformatExtension, createAutoformatExec());
+	const ctx = await createContext();
+	const file = `${ctx.cwd}/package.json`;
+	await writeFile(file, '{"b":2,"a":1}\n');
+	await pi.emit("turn_end", { turnIndex: 0 }, ctx);
+
+	const firstContext = { messages: [] as any[] };
+	const retryContext = { messages: [] as any[] };
+	await pi.emit("context", firstContext, ctx);
+	await pi.emit("context", retryContext, ctx);
+	await pi.emit("turn_end", { turnIndex: 1 }, ctx);
+	const followingContext = { messages: [] as any[] };
+	await pi.emit("context", followingContext, ctx);
+
+	assert.equal(firstContext.messages.at(-1)?.customType, "autoformat");
+	assert.equal(retryContext.messages.at(-1)?.customType, "autoformat");
+	assert.deepEqual(followingContext.messages, []);
 });
 
 test("autoformat clears its status during session shutdown", async () => {

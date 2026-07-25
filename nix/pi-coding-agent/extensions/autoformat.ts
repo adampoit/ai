@@ -29,6 +29,11 @@ type FormatResult = {
 	error?: string;
 };
 
+type FormattedFile = {
+	path: string;
+	formatter: string;
+};
+
 const FORMAT_TIMEOUT_MS = 15000;
 
 const lastFormatMtime = new Map<string, number>();
@@ -95,6 +100,19 @@ function formatFormatterSummary(
 		.join("  ");
 	const missingStatus = missing.map((command) => ` ${command}`).join("  ");
 	return [availableStatus, missingStatus].filter(Boolean).join("  ");
+}
+
+function formatSweepContext(formatted: FormattedFile[]): string {
+	const files = [...formatted]
+		.sort((a, b) => a.path.localeCompare(b.path))
+		.map(({ path, formatter }) => `- ${path} (${formatter})`)
+		.join("\n");
+	return [
+		"Autoformat changed these files after the previous tool results:",
+		files,
+		"",
+		"Their on-disk contents may differ from earlier reads and tool diffs. Re-read them before exact edits or interpreting diffs; do not restore formatting-only changes.",
+	].join("\n");
 }
 
 function formatOnOffSections(
@@ -712,6 +730,9 @@ async function getModifiedFiles(
 }
 
 export default function (pi: ExtensionAPI) {
+	const pendingSweepFormats = new Map<string, string>();
+	let sweepContextWasInjected = false;
+
 	pi.registerCommand("formatters", {
 		description: "Show detected project formatters and availability",
 		handler: async (_args, ctx) => {
@@ -868,10 +889,37 @@ export default function (pi: ExtensionAPI) {
 		return { details: newDetails };
 	});
 
+	pi.on("context", (event) => {
+		if (pendingSweepFormats.size === 0) return;
+
+		sweepContextWasInjected = true;
+		const formatted = [...pendingSweepFormats].map(([path, formatter]) => ({
+			path,
+			formatter,
+		}));
+		return {
+			messages: [
+				...event.messages,
+				{
+					role: "custom" as const,
+					customType: "autoformat",
+					content: formatSweepContext(formatted),
+					display: false,
+					timestamp: Date.now(),
+				},
+			],
+		};
+	});
+
 	pi.on("turn_end", async (_event, ctx) => {
+		if (sweepContextWasInjected) {
+			pendingSweepFormats.clear();
+			sweepContextWasInjected = false;
+		}
+
 		const cwd = resolve(ctx.cwd);
 		const modifiedFiles = await getModifiedFiles(pi, cwd, ctx.signal);
-		const formatted: { path: string; formatter: string }[] = [];
+		const formatted: FormattedFile[] = [];
 
 		for (const file of modifiedFiles) {
 			if (!isUsableFile(file)) continue;
@@ -895,6 +943,9 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		if (formatted.length > 0) {
+			for (const { path, formatter } of formatted) {
+				pendingSweepFormats.set(path, formatter);
+			}
 			const summary = formatted
 				.map((f) => `${f.path} (${f.formatter})`)
 				.join(", ");
