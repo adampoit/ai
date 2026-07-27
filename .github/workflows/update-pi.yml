@@ -55,16 +55,14 @@ jobs:
                   UPDATE_VERSION: ${{ inputs.version || '' }}
               run: |
                   set -euo pipefail
-                  args=(
-                    pi-coding-agent
-                    --flake
-                    --override-filename nix/pi-coding-agent-source.nix
-                    --use-github-releases
-                  )
-                  if [ -n "$UPDATE_VERSION" ]; then
-                    args+=(--version "$UPDATE_VERSION")
+                  if [ -z "$UPDATE_VERSION" ]; then
+                    UPDATE_VERSION=$(nix develop -c npm view @earendil-works/pi-coding-agent version)
                   fi
-                  nix develop -c nix-update "${args[@]}"
+                  nix develop -c nix-update pi-coding-agent \
+                    --flake \
+                    --override-filename nix/pi-coding-agent-source.nix \
+                    --src-only \
+                    --version "$UPDATE_VERSION"
 
             - name: Check for an update
               id: update
@@ -87,6 +85,11 @@ jobs:
                     "@earendil-works/pi-ai@$version" \
                     "@earendil-works/pi-coding-agent@$version" \
                     "@earendil-works/pi-tui@$version"
+                  nix develop -c nix-update pi-coding-agent \
+                    --flake \
+                    --override-filename nix/pi-coding-agent-source.nix \
+                    --no-src \
+                    --version skip
 
             - name: Format package metadata
               if: steps.update.outputs.changed == 'true'

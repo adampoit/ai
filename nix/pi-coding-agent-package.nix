@@ -1,7 +1,8 @@
 {
   buildNpmPackage,
   fd,
-  fetchFromGitHub,
+  fetchurl,
+  jq,
   lib,
   makeBinaryWrapper,
   nodejs_22,
@@ -9,50 +10,45 @@
   stdenvNoCC,
 }: let
   dependency = import ./pi-coding-agent-source.nix;
+  packageLock = builtins.fromJSON (builtins.readFile ../package-lock.json);
+  piPackageIntegrity = package:
+    packageLock.packages."node_modules/@earendil-works/${package}".integrity;
   buildNpmPackageNode22 = buildNpmPackage.override {nodejs = nodejs_22;};
 in
   buildNpmPackageNode22 {
     pname = "pi-coding-agent";
     inherit (dependency) version npmDepsHash;
 
-    src = fetchFromGitHub dependency.source;
-    npmWorkspace = "packages/coding-agent";
+    src = fetchurl dependency.source;
     npmDepsFetcherVersion = 2;
+    npmFlags = ["--omit=dev"];
     npmRebuildFlags = ["--ignore-scripts"];
+    dontNpmBuild = true;
 
     nativeBuildInputs = [makeBinaryWrapper];
 
-    buildPhase = ''
-      runHook preBuild
-
-      npx tsgo -p packages/ai/tsconfig.build.json
-      npx tsgo -p packages/tui/tsconfig.build.json
-      npx tsgo -p packages/agent/tsconfig.build.json
-      npm run build --workspace=packages/coding-agent
-
-      runHook postBuild
-    '';
-
-    postInstall =
-      ''
-        local nm="$out/lib/node_modules/pi-monorepo/node_modules"
-
-        for ws in @earendil-works/pi-ai:packages/ai \
-                  @earendil-works/pi-agent-core:packages/agent \
-                  @earendil-works/pi-tui:packages/tui; do
-          IFS=: read -r pkg src <<< "$ws"
-          rm "$nm/$pkg"
-          cp -r "$src" "$nm/$pkg"
-        done
-
-        find "$nm" -type l -lname '*/packages/*' -delete
-        find "$nm/.bin" -xtype l -delete
-      ''
-      + lib.optionalString stdenvNoCC.hostPlatform.isDarwin ''
-        rm -rf \
-          "$nm/@anthropic-ai/sandbox-runtime/dist/vendor/seccomp" \
-          "$nm/@anthropic-ai/sandbox-runtime/vendor/seccomp"
+    postPatch = let
+      addPiPackageIntegrity = package: ''
+        substituteInPlace npm-shrinkwrap.json \
+          --replace-fail \
+          '"resolved": "https://registry.npmjs.org/@earendil-works/pi-${package}/-/pi-${package}-${dependency.version}.tgz"' \
+          '"resolved": "https://registry.npmjs.org/@earendil-works/pi-${package}/-/pi-${package}-${dependency.version}.tgz", "integrity": "${piPackageIntegrity "pi-${package}"}"'
       '';
+    in
+      addPiPackageIntegrity "agent-core"
+      + addPiPackageIntegrity "ai"
+      + addPiPackageIntegrity "tui"
+      + ''
+        ${jq}/bin/jq 'del(.devDependencies)' package.json > package.json.tmp
+        mv package.json.tmp package.json
+      '';
+
+    postInstall = lib.optionalString stdenvNoCC.hostPlatform.isDarwin ''
+      local nm="$out/lib/node_modules/@earendil-works/pi-coding-agent/node_modules"
+      rm -rf \
+        "$nm/@anthropic-ai/sandbox-runtime/dist/vendor/seccomp" \
+        "$nm/@anthropic-ai/sandbox-runtime/vendor/seccomp"
+    '';
 
     postFixup = ''
       wrapProgram $out/bin/pi --prefix PATH : ${

@@ -1,12 +1,10 @@
 let
   version = "0.80.10";
 in {
-  npmDepsHash = "sha256-Ro2ovgqH6EpFb20M5DvcP6KIxXZPHcjeEdo1Sh4JbDM=";
+  npmDepsHash = "sha256-EwhPQG5r/6cmz8twsfQvcBLIBhL8dajwpZ0mjMy4+SE=";
   source = {
-    hash = "sha256-Vs/ndHYzFyfN4CjPV2zMYblLXe9IuM13UrPJI1VsZEQ=";
-    owner = "earendil-works";
-    repo = "pi";
-    rev = "v${version}";
+    hash = "sha256-nydxcRuNTruNWeMXcCarQXv8bK8NQpaljedBtB5NnBw=";
+    url = "https://registry.npmjs.org/@earendil-works/pi-coding-agent/-/pi-coding-agent-${version}.tgz";
   };
   inherit version;
 }
