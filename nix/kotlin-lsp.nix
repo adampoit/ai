@@ -16,24 +16,24 @@
   stdenvNoCC,
   unzip,
 }: let
-  version = "262.8190.0";
+  version = "262.9593.0";
   system = stdenv.hostPlatform.system;
   releases = {
     aarch64-darwin = {
       archive = "kotlin-server-${version}-aarch64.sit";
-      hash = "sha256-4gGDJieEu35mXOGupIVYcqixbyEeu0eNRSdzVTcy2fs=";
+      hash = "sha256-a6YCGnBrIeZM7zP34refGHwJEDIHIrstPtBa0RFexD8=";
     };
     x86_64-darwin = {
       archive = "kotlin-server-${version}.sit";
-      hash = "sha256-84Ra6e44wi715DY5DYaj2Qj3cHPpZn+mQ6WuCVfBlyg=";
+      hash = "sha256-Fzaf2pfIVBisJKs4qd9WshUio0aN/hk4Mv5FXBOSB0U=";
     };
     aarch64-linux = {
       archive = "kotlin-server-${version}-aarch64.tar.gz";
-      hash = "sha256-w+3VnvNKf6pNBPNRevt6kysZw/nPF9GhTp2hewtUQK0=";
+      hash = "sha256-IxeDHG5WB9BbfrwdplUzASXODj1m+/JFF9/ORC3rwU4=";
     };
     x86_64-linux = {
       archive = "kotlin-server-${version}.tar.gz";
-      hash = "sha256-i0xw6VBlQg54Z8mar58Y4LTnYxHsRT5MGjnj9q53TL8=";
+      hash = "sha256-LZnY4Zj75KqPRIHjd5lyTOlIA7TqEqYLQWBA4/zXzF4=";
     };
   };
   release = releases.${system} or (throw "kotlin-lsp: unsupported system ${system}");

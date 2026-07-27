@@ -1,4 +1,7 @@
-{piPackage}: {
+{
+  piPackage,
+  unified-review,
+}: {
   config,
   lib,
   pkgs,
@@ -42,7 +45,7 @@
     enableSkillCommands = lib.mkDefault true;
     packages = [
       "npm:pi-web-access@0.13.0"
-      "git:github.com/adampoit/unified-review.nvim"
+      (toString unified-review)
     ];
   };
 

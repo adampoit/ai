@@ -3,11 +3,16 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    unified-review = {
+      url = "github:adampoit/unified-review.nvim";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs = {
     self,
     nixpkgs,
+    unified-review,
     ...
   }: let
     supportedSystems = [
@@ -131,7 +136,7 @@
   in {
     homeManagerModules = {
       opencode = import ./nix/opencode.nix;
-      pi-coding-agent = import ./nix/pi-coding-agent.nix {inherit piPackage;};
+      pi-coding-agent = import ./nix/pi-coding-agent.nix {inherit piPackage unified-review;};
       default = self.homeManagerModules.opencode;
     };
 
