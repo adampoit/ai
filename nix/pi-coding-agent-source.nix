@@ -1,9 +1,9 @@
 let
-  version = "0.82.1";
+  version = "0.83.0";
 in {
-  npmDepsHash = "sha256-cRV1W5N2gUETt355jzdA+TEqcQsT5rg9lSAxx75cEGM=";
+  npmDepsHash = "sha256-2RTaFMXGfRLXj097XoggCo7vJlNxQOp+4l44YnXCEMM=";
   source = {
-    hash = "sha256-g0OrlcurV2by9dSIRN+NsT53Lq0uKXYWbLuCCinay30=";
+    hash = "sha256-cJf+Szh2Ldp+x4AB57kEMMhJ+69xcyW/6BCXROMiVeY=";
     url = "https://registry.npmjs.org/@earendil-works/pi-coding-agent/-/pi-coding-agent-${version}.tgz";
   };
   inherit version;
