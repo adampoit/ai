@@ -1108,7 +1108,6 @@ export default function (pi: ExtensionAPI) {
 			if (!result) continue;
 			const displayPath = relative(cwd, file);
 			if (result.error) {
-				pendingSweepFormats.delete(displayPath);
 				failures.push({
 					path: displayPath,
 					formatter: result.commandName,
@@ -1117,7 +1116,6 @@ export default function (pi: ExtensionAPI) {
 				continue;
 			}
 
-			pendingSweepFailures.delete(displayPath);
 			if (result.changed) {
 				let formattedMtime: number;
 				try {
