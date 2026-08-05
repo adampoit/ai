@@ -54,6 +54,20 @@ function createAutoformatExec(): ExecHandler {
 	};
 }
 
+function createFailingAutoformatExec(): ExecHandler {
+	const exec = createAutoformatExec();
+	return async (command, args, options) => {
+		if (basename(command) === "prettier" && args.includes("--write")) {
+			return {
+				code: 2,
+				stdout: "prettier stdout diagnostic",
+				stderr: "prettier stderr diagnostic",
+			};
+		}
+		return exec(command, args, options);
+	};
+}
+
 async function waitFor(condition: () => boolean) {
 	const deadline = Date.now() + 1000;
 	while (Date.now() < deadline) {
@@ -136,6 +150,67 @@ test("autoformat formats edit results and adds a formatter diff", async () => {
 	assert.ok(JSON.stringify(patch).includes("autoformatted with prettier"));
 	assert.equal((patch as any).details.formatter, "prettier");
 	assert.ok((patch as any).details.diff.includes("--- a/package.json"));
+});
+
+test("autoformat reports formatter diagnostics for tool results", async () => {
+	const pi = loadExtension(
+		autoformatExtension,
+		createFailingAutoformatExec(),
+	);
+	const ctx = await createContext();
+	const file = `${ctx.cwd}/package.json`;
+	await writeFile(file, '{"b":2,"a":1}\n');
+
+	const [patch] = await pi.emit(
+		"tool_result",
+		{
+			toolName: "edit",
+			input: { path: "package.json" },
+			content: [{ type: "text", text: "Edited package.json" }],
+			details: { originalContent: '{"b":2,"a":1}\n' },
+		},
+		ctx,
+	);
+
+	const diagnostic = ctx.notifications.at(-1)?.message ?? "";
+	assert.equal(ctx.notifications.at(-1)?.level, "warning");
+	assert.ok(
+		diagnostic.includes("Formatter failed for package.json"),
+		diagnostic,
+	);
+	assert.ok(diagnostic.includes("Command: prettier --write"), diagnostic);
+	assert.ok(diagnostic.includes("Exit code: 2"), diagnostic);
+	assert.ok(diagnostic.includes("prettier stderr diagnostic"), diagnostic);
+	assert.ok(diagnostic.includes("prettier stdout diagnostic"), diagnostic);
+	assert.ok((patch as any).content[1].text.includes("autoformat failed"));
+	assert.equal((patch as any).details.formatter, "prettier");
+	assert.equal((patch as any).details.formatterError.exitCode, 2);
+});
+
+test("autoformat reports sweep failures and injects their diagnostics", async () => {
+	const pi = loadExtension(
+		autoformatExtension,
+		createFailingAutoformatExec(),
+	);
+	const ctx = await createContext();
+	const file = `${ctx.cwd}/package.json`;
+	await writeFile(file, '{"b":2,"a":1}\n');
+
+	await pi.emit("turn_end", { turnIndex: 0 }, ctx);
+
+	const diagnostic = ctx.notifications.at(-1)?.message ?? "";
+	assert.equal(ctx.notifications.at(-1)?.level, "warning");
+	assert.ok(diagnostic.includes("Autoformat failed for 1 file"), diagnostic);
+	assert.ok(diagnostic.includes("package.json"), diagnostic);
+	assert.ok(diagnostic.includes("prettier stderr diagnostic"), diagnostic);
+
+	const context = { messages: [] as any[] };
+	await pi.emit("context", context, ctx);
+	const notice = context.messages.at(-1) as any;
+	assert.equal(notice.customType, "autoformat");
+	assert.ok(notice.content.includes("Exit code: 2"));
+	assert.ok(notice.content.includes("prettier stdout diagnostic"));
+	assert.ok(notice.content.includes("Re-read them before exact edits"));
 });
 
 test("autoformat formats modified files at turn end", async () => {
