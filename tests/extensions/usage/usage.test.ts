@@ -5,6 +5,7 @@ import usageExtension, {
 	openAiUsage,
 	quotaPace,
 	quotaWindowStatus,
+	resetDate,
 	resetEta,
 } from "../../../nix/pi-coding-agent/extensions/usage.ts";
 import {
@@ -60,6 +61,78 @@ test("usage command renders subscription and local session usage", async () => {
 	assert.ok(output.includes("Local Pi session usage"), output);
 	assert.ok(output.includes("3.7k tokens"), output);
 	assert.ok(output.includes("$0.05"), output);
+});
+
+test("quota windows expose exact reset dates alongside reset ETAs", () => {
+	const resetAt = "2030-01-02T03:04:05.000Z";
+	const options: Intl.DateTimeFormatOptions = {
+		weekday: "short",
+		year: "numeric",
+		month: "short",
+		day: "numeric",
+		hour: "numeric",
+		minute: "2-digit",
+		timeZoneName: "short",
+	};
+	assert.equal(
+		resetDate({ label: "primary", resetAt }),
+		new Intl.DateTimeFormat(undefined, options).format(new Date(resetAt)),
+	);
+	assert.equal(resetDate({ label: "primary" }), undefined);
+	assert.equal(
+		resetDate({ label: "primary", resetAt: "not-a-date" }),
+		undefined,
+	);
+});
+
+test("usage renders the reset date after the quota percentage", async () => {
+	const originalFetch = globalThis.fetch;
+	const resetAt = "2030-01-02T03:04:05.000Z";
+	globalThis.fetch = async () =>
+		new Response(
+			JSON.stringify({
+				rate_limit: {
+					primary_window: {
+						used_percent: 25,
+						reset_at: resetAt,
+					},
+				},
+			}),
+			{ status: 200 },
+		);
+	try {
+		const pi = loadExtension(usageExtension);
+		const rendered: string[] = [];
+		const ctx = await createContext();
+		ctx.modelRegistry.authStorage.list = () => ["openai"];
+		ctx.modelRegistry.authStorage.get = (key) =>
+			key === "openai"
+				? { type: "oauth", access: "test-token" }
+				: undefined;
+		ctx.ui.custom = async (factory: any, options?: unknown) => {
+			assert.deepEqual(options, { overlay: false });
+			const view = factory(
+				{ requestRender() {} },
+				ctx.ui.theme,
+				{ matches: () => false },
+				() => {},
+			);
+			rendered.push(...view.render(160));
+			return undefined as never;
+		};
+
+		await runCommand(pi, "usage", "", ctx);
+
+		const output = rendered.join("\n");
+		const formattedResetDate = resetDate({ label: "primary", resetAt });
+		assert.ok(formattedResetDate);
+		assert.ok(
+			output.includes(`75% remaining · resets ${formattedResetDate}`),
+			output,
+		);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
 });
 
 test("quota windows use reset ETAs without inferring OpenAI window durations", () => {

@@ -63,6 +63,21 @@ export function resetEta(window: UsageWindow): string | undefined {
 	return `${Math.round(hours / 24)}d`;
 }
 
+export function resetDate(window: UsageWindow): string | undefined {
+	if (!window.resetAt) return undefined;
+	const date = new Date(window.resetAt);
+	if (!Number.isFinite(date.getTime())) return undefined;
+	return new Intl.DateTimeFormat(undefined, {
+		weekday: "short",
+		year: "numeric",
+		month: "short",
+		day: "numeric",
+		hour: "numeric",
+		minute: "2-digit",
+		timeZoneName: "short",
+	}).format(date);
+}
+
 export function quotaPace(
 	_provider: string,
 	window: UsageWindow,
@@ -1117,10 +1132,20 @@ function renderUsageContent(
 				}
 
 				for (const window of provider.windows ?? []) {
+					const resetDateText = resetDate(window);
+					const parts =
+						[
+							...windowParts(window),
+							resetDateText
+								? `resets ${resetDateText}`
+								: undefined,
+						]
+							.filter((part): part is string => Boolean(part))
+							.join(" · ") || "available";
 					if (window.unlimited) {
 						lines.push(
 							truncateToWidth(
-								`  ${theme.fg("muted", windowParts(window).join(" · "))}`,
+								`  ${theme.fg("muted", parts)}`,
 								contentWidth,
 							),
 						);
@@ -1143,8 +1168,6 @@ function renderUsageContent(
 						theme,
 						paddingX: 1,
 					});
-					const parts =
-						windowParts(window).join(" · ") || "available";
 					lines.push(
 						truncateToWidth(
 							`  ${meter} ${label} ${parts}`,
