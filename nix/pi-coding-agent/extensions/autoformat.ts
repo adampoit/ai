@@ -17,21 +17,37 @@ import { basename, dirname, extname, join, relative, resolve } from "node:path";
 
 const PRETTIER_FORMATTER = ["prettier", "--write"];
 
+type FormatterError = {
+	command: string;
+	args: string[];
+	exitCode?: number;
+	reason?: string;
+	stdout?: string;
+	stderr?: string;
+};
+
 type ToolResultDetails = {
 	diff?: string;
 	formatter?: string;
+	formatterError?: FormatterError;
 	originalContent?: string;
 } & Record<string, unknown>;
 
 type FormatResult = {
 	commandName: string;
 	changed: boolean;
-	error?: string;
+	error?: FormatterError;
 };
 
 type FormattedFile = {
 	path: string;
 	formatter: string;
+};
+
+type SweepFailure = {
+	path: string;
+	formatter: string;
+	error: FormatterError;
 };
 
 const FORMAT_TIMEOUT_MS = 15000;
@@ -102,17 +118,38 @@ function formatFormatterSummary(
 	return [availableStatus, missingStatus].filter(Boolean).join("  ");
 }
 
-function formatSweepContext(formatted: FormattedFile[]): string {
-	const files = [...formatted]
-		.sort((a, b) => a.path.localeCompare(b.path))
-		.map(({ path, formatter }) => `- ${path} (${formatter})`)
-		.join("\n");
-	return [
-		"Autoformat changed these files after the previous tool results:",
-		files,
+function formatSweepContext(
+	formatted: FormattedFile[],
+	failures: SweepFailure[],
+): string {
+	const lines: string[] = [];
+	if (formatted.length > 0) {
+		const files = [...formatted]
+			.sort((a, b) => a.path.localeCompare(b.path))
+			.map(({ path, formatter }) => `- ${path} (${formatter})`)
+			.join("\n");
+		lines.push(
+			"Autoformat changed these files after the previous tool results:",
+			files,
+		);
+	}
+	if (failures.length > 0) {
+		if (lines.length > 0) lines.push("");
+		lines.push(
+			"Autoformat failed for these files:",
+			[...failures]
+				.sort((a, b) => a.path.localeCompare(b.path))
+				.map(({ path, formatter, error }) =>
+					formatFormatterFailure(path, formatter, error),
+				)
+				.join("\n\n"),
+		);
+	}
+	lines.push(
 		"",
-		"Their on-disk contents may differ from earlier reads and tool diffs. Re-read them before exact edits or interpreting diffs; do not restore formatting-only changes.",
-	].join("\n");
+		"Their on-disk contents may differ from earlier reads and tool diffs, including after a failed formatter. Re-read them before exact edits or interpreting diffs; do not restore formatting-only changes.",
+	);
+	return lines.join("\n");
 }
 
 function formatOnOffSections(
@@ -518,6 +555,60 @@ function formatCommandName(command: string): string {
 	return basename(command);
 }
 
+function formatCommand(command: string, args: string[]): string {
+	return [command, ...args]
+		.map((value) =>
+			/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)
+				? value
+				: JSON.stringify(value),
+		)
+		.join(" ");
+}
+
+function formatDiagnosticStream(label: string, output?: string): string[] {
+	const text = output?.replace(/\r\n?/g, "\n").trim();
+	if (!text) return [];
+	return [label + ":", ...text.split("\n").map((line) => `  ${line}`)];
+}
+
+function formatFormatterFailure(
+	displayPath: string,
+	formatter: string,
+	error: FormatterError,
+): string {
+	const lines = [
+		`Formatter failed for ${displayPath} using ${formatter}.`,
+		`Command: ${formatCommand(error.command, error.args)}`,
+	];
+	if (error.exitCode !== undefined)
+		lines.push(`Exit code: ${error.exitCode}`);
+	if (error.reason) lines.push(`Reason: ${error.reason}`);
+	lines.push(...formatDiagnosticStream("stderr", error.stderr));
+	lines.push(...formatDiagnosticStream("stdout", error.stdout));
+	if (!error.stderr?.trim() && !error.stdout?.trim())
+		lines.push("Diagnostic output: none.");
+	return lines.join("\n");
+}
+
+function formatSweepFailureSummary(failures: SweepFailure[]): string {
+	const count = failures.length;
+	const diagnostics = [...failures]
+		.sort((a, b) => a.path.localeCompare(b.path))
+		.map(({ path, formatter, error }) =>
+			formatFormatterFailure(path, formatter, error),
+		)
+		.join("\n\n");
+	return `Autoformat failed for ${count} file${count === 1 ? "" : "s"}:\n\n${diagnostics}`;
+}
+
+function appendFormatterNotice(content: unknown, notice: string): unknown {
+	if (typeof content === "string") return `${content}\n\n${notice}`;
+	if (Array.isArray(content)) {
+		return [...content, { type: "text" as const, text: notice }];
+	}
+	return content;
+}
+
 async function computeUnifiedDiff(
 	pi: ExtensionAPI,
 	before: string,
@@ -641,36 +732,102 @@ async function formatFile(
 
 	const isCachedPath = command.startsWith("/");
 	if (!isCachedPath) {
-		const available = await pi.exec(
-			"bash",
-			["-lc", `command -v "$1"`, "--", command],
-			{ cwd, signal, timeout: 2000 },
-		);
+		let available;
+		try {
+			available = await pi.exec(
+				"bash",
+				["-lc", `command -v "$1"`, "--", command],
+				{ cwd, signal, timeout: 2000 },
+			);
+		} catch (error) {
+			if (signal?.aborted) throw error;
+			return {
+				commandName,
+				changed: false,
+				error: {
+					command,
+					args,
+					reason: `could not check formatter availability: ${error instanceof Error ? error.message : String(error)}`,
+				},
+			};
+		}
 		if (available.code !== 0) {
 			return {
 				commandName,
 				changed: false,
-				error: "formatter not available",
+				error: {
+					command,
+					args,
+					reason: "formatter executable is not available on PATH",
+					stdout: available.stdout,
+					stderr: available.stderr,
+				},
 			};
 		}
 	}
 
-	const before = readFileSync(resolvedFile, "utf8");
-	const result = await pi.exec(command, args, {
-		cwd,
-		signal,
-		timeout: FORMAT_TIMEOUT_MS,
-	});
-	if (result.code !== 0) {
-		const output = (
-			result.stderr ||
-			result.stdout ||
-			"formatter failed"
-		).trim();
-		return { commandName, changed: false, error: output };
+	let before: string;
+	try {
+		before = readFileSync(resolvedFile, "utf8");
+	} catch (error) {
+		return {
+			commandName,
+			changed: false,
+			error: {
+				command,
+				args,
+				reason: `could not read file before formatting: ${error instanceof Error ? error.message : String(error)}`,
+			},
+		};
 	}
 
-	const after = readFileSync(resolvedFile, "utf8");
+	let result;
+	try {
+		result = await pi.exec(command, args, {
+			cwd,
+			signal,
+			timeout: FORMAT_TIMEOUT_MS,
+		});
+	} catch (error) {
+		if (signal?.aborted) throw error;
+		return {
+			commandName,
+			changed: false,
+			error: {
+				command,
+				args,
+				reason: error instanceof Error ? error.message : String(error),
+			},
+		};
+	}
+	if (result.code !== 0) {
+		return {
+			commandName,
+			changed: false,
+			error: {
+				command,
+				args,
+				exitCode: result.code,
+				stdout: result.stdout,
+				stderr: result.stderr,
+			},
+		};
+	}
+
+	let after: string;
+	try {
+		after = readFileSync(resolvedFile, "utf8");
+	} catch (error) {
+		return {
+			commandName,
+			changed: false,
+			error: {
+				command,
+				args,
+				reason: `could not read file after formatting: ${error instanceof Error ? error.message : String(error)}`,
+			},
+		};
+	}
 	const changed = before !== after;
 	return { commandName, changed };
 }
@@ -731,6 +888,7 @@ async function getModifiedFiles(
 
 export default function (pi: ExtensionAPI) {
 	const pendingSweepFormats = new Map<string, string>();
+	const pendingSweepFailures = new Map<string, SweepFailure>();
 	let sweepContextWasInjected = false;
 
 	pi.registerCommand("formatters", {
@@ -837,12 +995,24 @@ export default function (pi: ExtensionAPI) {
 		if (!formatResult) return;
 
 		if (formatResult.error) {
-			notifyFormatterWarning(
-				ctx,
-				`Formatter failed using ${formatResult.commandName}: ${formatResult.error}`,
+			const diagnostic = formatFormatterFailure(
+				displayPath,
+				formatResult.commandName,
+				formatResult.error,
 			);
+			notifyFormatterWarning(ctx, diagnostic);
 			await refreshFormatterStatus(pi, ctx);
-			return;
+			return {
+				content: appendFormatterNotice(
+					event.content,
+					`Note: autoformat failed after ${event.toolName}.\n\n${diagnostic}`,
+				),
+				details: {
+					...((event.details as ToolResultDetails | undefined) ?? {}),
+					formatter: formatResult.commandName,
+					formatterError: formatResult.error,
+				},
+			};
 		}
 
 		if (formatResult.changed) {
@@ -855,11 +1025,7 @@ export default function (pi: ExtensionAPI) {
 		let content: any = event.content;
 		if (formatResult.changed) {
 			const notice = `Note: This file was autoformatted with ${formatResult.commandName} after the ${event.toolName}.`;
-			if (typeof content === "string") {
-				content = `${content}\n\n${notice}`;
-			} else if (Array.isArray(content)) {
-				content = [...content, { type: "text" as const, text: notice }];
-			}
+			content = appendFormatterNotice(content, notice);
 		}
 
 		if (event.toolName !== "edit") {
@@ -890,7 +1056,8 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("context", (event) => {
-		if (pendingSweepFormats.size === 0) return;
+		if (pendingSweepFormats.size === 0 && pendingSweepFailures.size === 0)
+			return;
 
 		sweepContextWasInjected = true;
 		const formatted = [...pendingSweepFormats].map(([path, formatter]) => ({
@@ -903,7 +1070,9 @@ export default function (pi: ExtensionAPI) {
 				{
 					role: "custom" as const,
 					customType: "autoformat",
-					content: formatSweepContext(formatted),
+					content: formatSweepContext(formatted, [
+						...pendingSweepFailures.values(),
+					]),
 					display: false,
 					timestamp: Date.now(),
 				},
@@ -914,12 +1083,14 @@ export default function (pi: ExtensionAPI) {
 	pi.on("turn_end", async (_event, ctx) => {
 		if (sweepContextWasInjected) {
 			pendingSweepFormats.clear();
+			pendingSweepFailures.clear();
 			sweepContextWasInjected = false;
 		}
 
 		const cwd = resolve(ctx.cwd);
 		const modifiedFiles = await getModifiedFiles(pi, cwd, ctx.signal);
 		const formatted: FormattedFile[] = [];
+		const failures: SweepFailure[] = [];
 
 		for (const file of modifiedFiles) {
 			if (!isUsableFile(file)) continue;
@@ -931,12 +1102,23 @@ export default function (pi: ExtensionAPI) {
 			if (lastFormatted !== undefined && mtime <= lastFormatted) continue;
 
 			const result = await formatFile(pi, file, cwd, ctx.signal);
-			if (!result || result.error) continue;
+			if (!result) continue;
+			const displayPath = relative(cwd, file);
+			if (result.error) {
+				pendingSweepFormats.delete(displayPath);
+				failures.push({
+					path: displayPath,
+					formatter: result.commandName,
+					error: result.error,
+				});
+				continue;
+			}
 
+			pendingSweepFailures.delete(displayPath);
 			if (result.changed) {
 				lastFormatMtime.set(file, statSync(file).mtimeMs);
 				formatted.push({
-					path: relative(cwd, file),
+					path: displayPath,
 					formatter: result.commandName,
 				});
 			}
@@ -953,6 +1135,13 @@ export default function (pi: ExtensionAPI) {
 				ctx,
 				`Autoformatted ${formatted.length} file${formatted.length === 1 ? "" : "s"}: ${summary}`,
 			);
+		}
+
+		if (failures.length > 0) {
+			for (const failure of failures) {
+				pendingSweepFailures.set(failure.path, failure);
+			}
+			notifyFormatterWarning(ctx, formatSweepFailureSummary(failures));
 		}
 	});
 }
