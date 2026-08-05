@@ -1081,11 +1081,9 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("turn_end", async (_event, ctx) => {
-		if (sweepContextWasInjected) {
-			pendingSweepFormats.clear();
-			pendingSweepFailures.clear();
-			sweepContextWasInjected = false;
-		}
+		pendingSweepFormats.clear();
+		pendingSweepFailures.clear();
+		sweepContextWasInjected = false;
 
 		const cwd = resolve(ctx.cwd);
 		const modifiedFiles = await getModifiedFiles(pi, cwd, ctx.signal);
@@ -1097,7 +1095,12 @@ export default function (pi: ExtensionAPI) {
 			if (!getFormatter(file) && extname(file).toLowerCase() !== ".cs")
 				continue;
 
-			const mtime = statSync(file).mtimeMs;
+			let mtime: number;
+			try {
+				mtime = statSync(file).mtimeMs;
+			} catch {
+				continue;
+			}
 			const lastFormatted = lastFormatMtime.get(file);
 			if (lastFormatted !== undefined && mtime <= lastFormatted) continue;
 
@@ -1116,7 +1119,13 @@ export default function (pi: ExtensionAPI) {
 
 			pendingSweepFailures.delete(displayPath);
 			if (result.changed) {
-				lastFormatMtime.set(file, statSync(file).mtimeMs);
+				let formattedMtime: number;
+				try {
+					formattedMtime = statSync(file).mtimeMs;
+				} catch {
+					continue;
+				}
+				lastFormatMtime.set(file, formattedMtime);
 				formatted.push({
 					path: displayPath,
 					formatter: result.commandName,
