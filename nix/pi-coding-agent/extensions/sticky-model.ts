@@ -5,31 +5,102 @@ import { randomUUID } from "node:crypto";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-type StickyModel = {
+type ModelReference = {
 	provider: string;
 	model: string;
-	thinkingLevels?: Record<string, ThinkingLevel>;
 };
 
-type Store = Record<string, StickyModel>;
+type ModelPreference = {
+	thinkingLevel: ThinkingLevel;
+};
 
+type Store = {
+	version: 2;
+	directories: Record<string, ModelReference>;
+	modelPreferences: Record<string, ModelPreference>;
+};
+
+const storeVersion = 2;
 const storePath = join(homedir(), ".pi", "agent", "sticky-models.json");
 
 function modelKey(provider: string, model: string) {
 	return `${provider}/${model}`;
 }
 
-function getSavedThinkingLevel(saved: StickyModel | undefined) {
-	if (!saved) return undefined;
-	return saved.thinkingLevels?.[modelKey(saved.provider, saved.model)];
+function createStore(): Store {
+	return {
+		version: storeVersion,
+		directories: {},
+		modelPreferences: {},
+	};
 }
 
-async function readStore(): Promise<Store> {
-	try {
-		return JSON.parse(await readFile(storePath, "utf8"));
-	} catch {
-		return {};
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isThinkingLevel(value: unknown): value is ThinkingLevel {
+	return (
+		value === "off" ||
+		value === "minimal" ||
+		value === "low" ||
+		value === "medium" ||
+		value === "high" ||
+		value === "xhigh" ||
+		value === "max"
+	);
+}
+
+function isModelReference(value: unknown): value is ModelReference {
+	return (
+		isRecord(value) &&
+		typeof value.provider === "string" &&
+		typeof value.model === "string"
+	);
+}
+
+function isModelPreference(value: unknown): value is ModelPreference {
+	return isRecord(value) && isThinkingLevel(value.thinkingLevel);
+}
+
+function isCurrentStore(value: unknown): value is Store {
+	if (
+		!isRecord(value) ||
+		value.version !== storeVersion ||
+		!isRecord(value.directories) ||
+		!isRecord(value.modelPreferences)
+	) {
+		return false;
 	}
+
+	return (
+		Object.values(value.directories).every(isModelReference) &&
+		Object.values(value.modelPreferences).every(isModelPreference)
+	);
+}
+
+function migrateLegacyStore(value: Record<string, unknown>): Store {
+	const store = createStore();
+
+	for (const [cwd, saved] of Object.entries(value)) {
+		if (!isRecord(saved)) continue;
+		const thinkingLevels = saved.thinkingLevels;
+		if (!isModelReference(saved)) continue;
+
+		store.directories[cwd] = {
+			provider: saved.provider,
+			model: saved.model,
+		};
+
+		if (!isRecord(thinkingLevels)) continue;
+		for (const [key, level] of Object.entries(thinkingLevels)) {
+			if (isThinkingLevel(level)) {
+				store.modelPreferences[key] = { thinkingLevel: level };
+			}
+		}
+	}
+
+	return store;
 }
 
 async function writeStore(store: Store) {
@@ -42,6 +113,35 @@ async function writeStore(store: Store) {
 		await unlink(tempPath).catch(() => {});
 		throw err;
 	}
+}
+
+async function readStore(): Promise<Store> {
+	let value: unknown;
+	try {
+		value = JSON.parse(await readFile(storePath, "utf8"));
+	} catch {
+		return createStore();
+	}
+
+	if (isCurrentStore(value)) return value;
+	if (!isRecord(value) || "version" in value) return createStore();
+
+	const migrated = migrateLegacyStore(value);
+	try {
+		await writeStore(migrated);
+	} catch {
+		// Keep using the migrated in-memory store if the legacy file is read-only.
+	}
+	return migrated;
+}
+
+function getSavedThinkingLevel(
+	store: Store,
+	model: ModelReference | undefined,
+) {
+	if (!model) return undefined;
+	return store.modelPreferences[modelKey(model.provider, model.model)]
+		?.thinkingLevel;
 }
 
 // Serialize all updates so concurrent handlers can't race.
@@ -73,13 +173,14 @@ export default function (pi: ExtensionAPI) {
 	let applyingStickyModel = false;
 
 	pi.on("session_start", async (_event, ctx) => {
-		const saved = (await getStore())[ctx.cwd];
+		const store = await getStore();
+		const saved = store.directories[ctx.cwd];
 		if (!saved) return;
 		const modelAlreadySelected =
 			ctx.model?.provider === saved.provider &&
 			ctx.model.id === saved.model;
 		if (modelAlreadySelected) {
-			const thinkingLevel = getSavedThinkingLevel(saved);
+			const thinkingLevel = getSavedThinkingLevel(store, saved);
 			if (thinkingLevel) pi.setThinkingLevel(thinkingLevel);
 			return;
 		}
@@ -103,7 +204,7 @@ export default function (pi: ExtensionAPI) {
 				);
 				return;
 			}
-			const thinkingLevel = getSavedThinkingLevel(saved);
+			const thinkingLevel = getSavedThinkingLevel(store, saved);
 			if (thinkingLevel) pi.setThinkingLevel(thinkingLevel);
 		} finally {
 			queueMicrotask(() => {
@@ -118,19 +219,12 @@ export default function (pi: ExtensionAPI) {
 
 		let thinkingLevelToRestore: ThinkingLevel | undefined;
 		await updateStore((store) => {
-			const current = store[ctx.cwd];
 			const key = modelKey(event.model.provider, event.model.id);
-			thinkingLevelToRestore = current?.thinkingLevels?.[key];
-			const thinkingLevel =
-				thinkingLevelToRestore ?? pi.getThinkingLevel();
+			thinkingLevelToRestore = store.modelPreferences[key]?.thinkingLevel;
 
-			store[ctx.cwd] = {
+			store.directories[ctx.cwd] = {
 				provider: event.model.provider,
 				model: event.model.id,
-				thinkingLevels: {
-					...current?.thinkingLevels,
-					[key]: thinkingLevel,
-				},
 			};
 		});
 
@@ -141,18 +235,14 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("thinking_level_select", async (event, ctx) => {
 		await updateStore((store) => {
-			const current = store[ctx.cwd];
+			const current = store.directories[ctx.cwd];
 			const provider = ctx.model?.provider ?? current?.provider;
 			const model = ctx.model?.id ?? current?.model;
 			if (!provider || !model) return;
 
-			store[ctx.cwd] = {
-				provider,
-				model,
-				thinkingLevels: {
-					...current?.thinkingLevels,
-					[modelKey(provider, model)]: event.level,
-				},
+			store.directories[ctx.cwd] = { provider, model };
+			store.modelPreferences[modelKey(provider, model)] = {
+				thinkingLevel: event.level,
 			};
 		});
 	});
