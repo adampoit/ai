@@ -1,6 +1,6 @@
 ---
 name: taskwarrior
-description: Manage tasks with the `task` (Taskwarrior) CLI. Use when the user asks to review tasks, get task summaries, add work items, or complete tasks.
+description: Manage tasks with the `task` (Taskwarrior) CLI, including attaching notes with `task-note`. Use when the user asks to review tasks, get task summaries, add work items, complete tasks, or attach notes.
 ---
 
 # Taskwarrior
@@ -65,6 +65,51 @@ Create a task (mutating):
 task add "Write Q1 planning notes" project:planning due:tomorrow priority:M +work +writing
 ```
 
+## Attach Notes
+
+`task-note` is an external Taskwarrior helper, not a built-in `task` command. Confirm it is installed before using it:
+
+```bash
+command -v task-note
+```
+
+It takes exactly one argument. It ensures the task has a `Notes file: <notes-dir>/<uuid>.md (read this file for full content)` annotation, then opens the note in an interactive editor via `taskopen`:
+
+```bash
+task-note <task-id-or-uuid>
+```
+
+Notes live in `$XDG_DATA_HOME/tasknotes/<uuid>.md` (default `~/.local/share/tasknotes/<uuid>.md`).
+
+### Non-interactive (agents)
+
+`task-note <task>` with no subcommand opens an editor, so agents should use the subcommands instead:
+
+```bash
+task-note <task-id-or-uuid> set <<'EOF'
+# Note title
+
+Note body...
+EOF
+
+task-note <task-id-or-uuid> append <<'EOF'
+More details...
+EOF
+
+task-note <task-id-or-uuid> show   # print the note contents
+task-note <task-id-or-uuid> path   # print the note file path
+```
+
+`set`, `append`, and `path` create the `Notes file:` annotation automatically; UUID resolution and file placement are handled by the script.
+
+Use a plain annotation only when a short inline note is sufficient:
+
+Use a plain annotation only when a short inline note is sufficient:
+
+```bash
+task <task-id-or-uuid> annotate "Short note"
+```
+
 ## Complete Task
 
 Mark task done (mutating):
@@ -75,6 +120,6 @@ task <task-id-or-uuid> done
 
 ## Guardrails
 
-- Read-only operations: `task ... export` and `task ...` listing/info commands
-- Mutating operations: `task add`, `task <id> done`, `task modify`, `task delete`
+- Read-only operations: `task ... export` and `task ...` listing/info commands; `task-note <id> show` and `task-note <id> path` (path may add the notes annotation)
+- Mutating operations: `task add`, `task <id> done`, `task modify`, `task <id> annotate`, `task <id> delete`, `task-note <id>`, and `task-note <id> set|append`
 - Only run mutating commands when the user explicitly asks for changes
