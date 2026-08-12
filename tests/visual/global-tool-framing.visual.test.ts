@@ -7,15 +7,12 @@ import {
 	readFile,
 	writeFile,
 } from "node:fs/promises";
-import { constants, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
-import { ShellUse } from "shell-use";
+import { TuiTest } from "@microsoft/tui-test";
 
 const enabled = process.env.RUN_VISUAL_E2E === "1";
-const shellUseBinary =
-	process.env.SHELL_USE_BIN ?? findExecutable("shell-use") ?? "shell-use";
 const piBinary = resolve("node_modules/.bin/pi");
 const fixtureCwd = resolve("tests/visual/fixture-project");
 const webAccessExtension = resolve("node_modules/pi-web-access/index.ts");
@@ -26,26 +23,9 @@ const extensions = [
 	resolve("tests/visual/extensions/third-party-fixture.ts"),
 ];
 
-function findExecutable(name: string): string | undefined {
-	return (process.env.PATH ?? "")
-		.split(delimiter)
-		.map((directory) => join(directory, name))
-		.find((candidate) => existsSync(candidate));
-}
-
-async function available(): Promise<boolean> {
-	if (!enabled) return false;
-	try {
-		await access(shellUseBinary, constants.X_OK);
-		return true;
-	} catch {
-		return false;
-	}
-}
-
 test(
 	"real Pi TUI composes global tool frames deterministically",
-	{ skip: !(await available()) && "set RUN_VISUAL_E2E=1 and SHELL_USE_BIN" },
+	{ skip: !enabled && "set RUN_VISUAL_E2E=1" },
 	async (t) => {
 		for (const fixture of [
 			{
@@ -74,10 +54,7 @@ test(
 						join(tmpdir(), "pi-tool-frame-"),
 					);
 					await installTheme(sessionHome);
-					const shell = new ShellUse(undefined, {
-						binary: shellUseBinary,
-						home: join(sessionHome, "shell-use"),
-					});
+					const shell = TuiTest.ephemeral("pi-tool-frame");
 					try {
 						await shell.run(
 							piBinary,
@@ -153,10 +130,7 @@ test(
 				await installTheme(sessionHome);
 				const ready = join(sessionHome, "ready");
 				const release = join(sessionHome, "release");
-				const shell = new ShellUse(undefined, {
-					binary: shellUseBinary,
-					home: join(sessionHome, "shell-use"),
-				});
+				const shell = TuiTest.ephemeral("pi-tool-frame");
 				try {
 					await shell.run(
 						piBinary,
@@ -365,11 +339,8 @@ async function runFixture(
 	env: Record<string, string> = {},
 	extraExtensions: string[] = [],
 	cwd = fixtureCwd,
-): Promise<ShellUse> {
-	const shell = new ShellUse(undefined, {
-		binary: shellUseBinary,
-		home: join(home, "shell-use"),
-	});
+): Promise<TuiTest> {
+	const shell = TuiTest.ephemeral("pi-tool-frame");
 	await shell.run(
 		piBinary,
 		[

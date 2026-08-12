@@ -24,48 +24,49 @@
     forAllSystems = function:
       nixpkgs.lib.genAttrs supportedSystems (system:
         function (import nixpkgs {inherit system;}));
-    shellUse = pkgs: let
-      version = "0.0.1-beta.3";
+    tuiTest = pkgs: let
+      version = "0.1.0-beta.1";
       release =
         {
           aarch64-darwin = {
             target = "aarch64-apple-darwin";
-            hash = "sha256-z2UV50ABN9wFUsLwZftBYCnb6DXWHc0bymu/3sWMPu4=";
+            hash = "sha256-dTgneM5pSW4xfG8cRZ8TmY9hP8o9QzKXB2cODflsX64=";
           };
           x86_64-darwin = {
             target = "x86_64-apple-darwin";
-            hash = "sha256-BT/eT9RZDfVxn+UguLomqo9K3uTus+hSp+u8D0Hx2mE=";
+            hash = "sha256-5I4SHpaR4BCOxeCaYA8hRPzOxclUwhePwPawAux67zM=";
           };
           aarch64-linux = {
             target = "aarch64-unknown-linux-musl";
-            hash = "sha256-JHxyz5sB+eoGIl9J9SxpLoaeFzeJkqxOem6ukvnMxVQ=";
+            hash = "sha256-8KdCC1fYJgcfGPmqpSXWH/0sQ0aA5dllkV1CkVz/KJY=";
           };
           x86_64-linux = {
             target = "x86_64-unknown-linux-musl";
-            hash = "sha256-CPaoiqTeZNQJew2nIMifLNnA3nr1o1/rhLZEMhdH82o=";
+            hash = "sha256-grGMos4wtrrSdNcQkhva+Q41w2eqJXHYyKZJ/x/ZfFk=";
           };
         }.${
           pkgs.stdenv.hostPlatform.system
         };
     in
       pkgs.stdenvNoCC.mkDerivation {
-        pname = "shell-use";
+        pname = "tui-test";
         inherit version;
         src = pkgs.fetchurl {
-          url = "https://github.com/microsoft/shell-use/releases/download/v${version}/shell-use-${release.target}.tar.gz";
+          url = "https://github.com/microsoft/tui-test/releases/download/${version}/tui-test-${release.target}.tar.gz";
           inherit (release) hash;
         };
         sourceRoot = ".";
         installPhase = ''
           runHook preInstall
-          install -Dm755 shell-use $out/bin/shell-use
+          install -Dm755 tui-test $out/bin/tui-test
+          ln -s tui-test $out/bin/shell-use
           runHook postInstall
         '';
         meta = {
           description = "Headless terminal CLI for driving and testing terminal applications";
-          homepage = "https://github.com/microsoft/shell-use";
+          homepage = "https://github.com/microsoft/tui-test";
           license = pkgs.lib.licenses.mit;
-          mainProgram = "shell-use";
+          mainProgram = "tui-test";
           platforms = supportedSystems;
         };
       };
@@ -143,9 +144,10 @@
     packages = forAllSystems (pkgs: {
       kotlin-lsp = kotlinLsp pkgs;
       pi-coding-agent = piPackage pkgs;
-      shell-use = shellUse pkgs;
+      tui-test = tuiTest pkgs;
+      shell-use = tuiTest pkgs;
       xterm-headless = xtermHeadless pkgs;
-      default = shellUse pkgs;
+      default = tuiTest pkgs;
     });
 
     checks = forAllSystems (pkgs: {
@@ -160,7 +162,7 @@
         packages =
           lspTestPackages pkgs
           ++ [
-            (shellUse pkgs)
+            (tuiTest pkgs)
           ];
       };
     });
