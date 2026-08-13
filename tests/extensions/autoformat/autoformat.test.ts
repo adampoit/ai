@@ -152,6 +152,95 @@ test("autoformat formats edit results and adds a formatter diff", async () => {
 	assert.ok((patch as any).details.diff.includes("--- a/package.json"));
 });
 
+test("autoformat ignores flake.lock tool results", async () => {
+	const pi = loadExtension(autoformatExtension, createAutoformatExec());
+	const ctx = await createContext();
+	const file = `${ctx.cwd}/flake.lock`;
+	const original = '{\n  "version": 7\n}\n';
+	await writeFile(file, original);
+
+	const [patch] = await pi.emit(
+		"tool_result",
+		{
+			toolName: "write",
+			input: { path: "flake.lock" },
+			content: "Wrote flake.lock",
+		},
+		ctx,
+	);
+
+	assert.equal(patch, undefined);
+	assert.equal(await readFile(file, "utf8"), original);
+	assert.deepEqual(pi.execCalls, []);
+	assert.deepEqual(ctx.notifications, []);
+});
+
+test("autoformat ignores modified flake.lock files at turn end", async () => {
+	const pi = loadExtension(autoformatExtension, async (command, args) => {
+		if (command === "git" && args.join(" ") === "status --porcelain") {
+			return { code: 0, stdout: " M flake.lock\n", stderr: "" };
+		}
+		return { code: 1, stdout: "", stderr: `${command} not mocked` };
+	});
+	const ctx = await createContext();
+	const file = `${ctx.cwd}/flake.lock`;
+	const original = '{\n  "version": 7\n}\n';
+	await writeFile(file, original);
+
+	await pi.emit("turn_end", { turnIndex: 0 }, ctx);
+
+	assert.equal(await readFile(file, "utf8"), original);
+	assert.deepEqual(ctx.notifications, []);
+	assert.deepEqual(
+		pi.execCalls.map(({ command }) => command),
+		["git"],
+	);
+});
+
+test("autoformat falls back to Alejandra when a flake has no formatter", async () => {
+	let formatterRuns = 0;
+	const pi = loadExtension(autoformatExtension, async (command, args) => {
+		if (command === "git" && args[0] === "ls-files") {
+			return { code: 0, stdout: "source.nix\n", stderr: "" };
+		}
+		if (command === "bash" && args[1]?.includes("command -v")) {
+			return args.at(-1) === "alejandra"
+				? { code: 0, stdout: "/mock/bin/alejandra\n", stderr: "" }
+				: { code: 1, stdout: "", stderr: "" };
+		}
+		if (command === "alejandra") {
+			const file = args.at(-1);
+			if (!file) throw new Error("missing Alejandra file");
+			formatterRuns++;
+			await writeFile(file, "formatted = true;\n");
+			return { code: 0, stdout: "", stderr: "" };
+		}
+		return { code: 1, stdout: "", stderr: `${command} not mocked` };
+	});
+	const ctx = await createContext();
+	await writeFile(`${ctx.cwd}/flake.nix`, "{ outputs = {}; }\n");
+	const file = `${ctx.cwd}/source.nix`;
+	await writeFile(file, "formatted =   true;\n");
+
+	const [patch] = await pi.emit(
+		"tool_result",
+		{
+			toolName: "write",
+			input: { path: "source.nix" },
+			content: "Wrote source.nix",
+		},
+		ctx,
+	);
+
+	assert.equal(formatterRuns, 1);
+	assert.equal(await readFile(file, "utf8"), "formatted = true;\n");
+	assert.equal(
+		pi.execCalls.some(({ command }) => command === "nix"),
+		false,
+	);
+	assert.ok(JSON.stringify(patch).includes("autoformatted with alejandra"));
+});
+
 test("autoformat reports formatter diagnostics for tool results", async () => {
 	const pi = loadExtension(
 		autoformatExtension,
