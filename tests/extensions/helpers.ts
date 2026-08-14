@@ -112,6 +112,20 @@ export class FakePi {
 		string,
 		Array<(event: unknown, ctx: TestExtensionContext) => unknown>
 	>();
+	readonly events = {
+		handlers: new Map<string, Set<(data: unknown) => void>>(),
+		emit: (channel: string, data: unknown) => {
+			for (const handler of this.events.handlers.get(channel) ?? []) {
+				handler(data);
+			}
+		},
+		on: (channel: string, handler: (data: unknown) => void) => {
+			const handlers = this.events.handlers.get(channel) ?? new Set();
+			handlers.add(handler);
+			this.events.handlers.set(channel, handlers);
+			return () => handlers.delete(handler);
+		},
+	};
 	readonly execCalls: ExecCall[] = [];
 	readonly selectedModels: unknown[] = [];
 	readonly selectedThinkingLevels: string[] = [];
