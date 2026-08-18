@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -53,6 +53,8 @@ test("sticky-model persists selected model and reapplies it on session start", a
 			},
 			ctx,
 		);
+		ctx.model = { provider: "openai", id: "gpt-test" };
+		await pi.emit("thinking_level_select", { level: "medium" }, ctx);
 
 		const store = JSON.parse(
 			await readFile(
@@ -60,11 +62,16 @@ test("sticky-model persists selected model and reapplies it on session start", a
 				"utf8",
 			),
 		);
-		assert.deepEqual(store[ctx.cwd], {
-			provider: "openai",
-			model: "gpt-test",
-			thinkingLevels: {
-				"openai/gpt-test": "medium",
+		assert.deepEqual(store, {
+			version: 2,
+			directories: {
+				[ctx.cwd]: {
+					provider: "openai",
+					model: "gpt-test",
+				},
+			},
+			modelPreferences: {
+				"openai/gpt-test": { thinkingLevel: "medium" },
 			},
 		});
 
@@ -91,7 +98,7 @@ test("sticky-model persists selected model and reapplies it on session start", a
 	}
 });
 
-test("sticky-model restores thinking levels per selected model", async () => {
+test("sticky-model restores thinking levels globally per selected model", async () => {
 	const oldHome = process.env.HOME;
 	const home = await mkdtemp(path.join(tmpdir(), "pi-sticky-home-"));
 	try {
@@ -108,8 +115,9 @@ test("sticky-model restores thinking levels per selected model", async () => {
 			},
 			ctx,
 		);
+		ctx.model = { provider: "openai", id: "gpt-a" };
+		await pi.emit("thinking_level_select", { level: "medium" }, ctx);
 
-		pi.thinkingLevel = "high";
 		await pi.emit(
 			"model_select",
 			{
@@ -134,20 +142,95 @@ test("sticky-model restores thinking levels per selected model", async () => {
 		assert.equal(pi.thinkingLevel, "medium");
 		assert.deepEqual(pi.selectedThinkingLevels, ["medium"]);
 
+		const otherCtx = await createContext({ cwd: "/tmp/project-b" });
+		pi.thinkingLevel = "max";
+		await pi.emit(
+			"model_select",
+			{
+				source: "set",
+				model: { provider: "openai", id: "gpt-a" },
+			},
+			otherCtx,
+		);
+
+		assert.equal(pi.thinkingLevel, "medium");
+
 		const store = JSON.parse(
 			await readFile(
 				path.join(home, ".pi/agent/sticky-models.json"),
 				"utf8",
 			),
 		);
-		assert.deepEqual(store[ctx.cwd], {
-			provider: "openai",
-			model: "gpt-a",
-			thinkingLevels: {
-				"openai/gpt-a": "medium",
-				"anthropic/claude-b": "low",
+		assert.deepEqual(store, {
+			version: 2,
+			directories: {
+				"/tmp/project-a": {
+					provider: "openai",
+					model: "gpt-a",
+				},
+				"/tmp/project-b": {
+					provider: "openai",
+					model: "gpt-a",
+				},
+			},
+			modelPreferences: {
+				"openai/gpt-a": { thinkingLevel: "medium" },
+				"anthropic/claude-b": { thinkingLevel: "low" },
 			},
 		});
+	} finally {
+		process.env.HOME = oldHome;
+	}
+});
+
+test("sticky-model migrates legacy directory-scoped thinking levels", async () => {
+	const oldHome = process.env.HOME;
+	const home = await mkdtemp(path.join(tmpdir(), "pi-sticky-home-"));
+	try {
+		const storeDirectory = path.join(home, ".pi/agent");
+		await mkdir(storeDirectory, { recursive: true });
+		await writeFile(
+			path.join(storeDirectory, "sticky-models.json"),
+			JSON.stringify({
+				"/tmp/project-a": {
+					provider: "openai",
+					model: "gpt-test",
+					thinkingLevels: { "openai/gpt-test": "medium" },
+				},
+			}),
+		);
+
+		const stickyModelExtension = await importStickyModelExtension(home);
+		const pi = loadExtension(stickyModelExtension);
+		const ctx = await createContext({ cwd: "/tmp/project-a" });
+		const restoredModel = { provider: "openai", id: "gpt-test" };
+		ctx.model = { provider: "other", id: "current" };
+		ctx.modelRegistry.find = () => restoredModel;
+
+		await pi.emit("session_start", { reason: "startup" }, ctx);
+
+		assert.deepEqual(pi.selectedModels, [restoredModel]);
+		assert.deepEqual(pi.selectedThinkingLevels, ["medium"]);
+		assert.deepEqual(
+			JSON.parse(
+				await readFile(
+					path.join(home, ".pi/agent/sticky-models.json"),
+					"utf8",
+				),
+			),
+			{
+				version: 2,
+				directories: {
+					"/tmp/project-a": {
+						provider: "openai",
+						model: "gpt-test",
+					},
+				},
+				modelPreferences: {
+					"openai/gpt-test": { thinkingLevel: "medium" },
+				},
+			},
+		);
 	} finally {
 		process.env.HOME = oldHome;
 	}
