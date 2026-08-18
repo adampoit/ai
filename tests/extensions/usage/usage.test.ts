@@ -11,6 +11,7 @@ import { registerUsageProvider } from "../../../nix/pi-coding-agent/usage-contra
 import {
 	assertPublicSurface,
 	createContext,
+	FakePi,
 	loadExtension,
 	runCommand,
 } from "../helpers.ts";
@@ -19,6 +20,39 @@ test("usage extension registers its public surface", () => {
 	const pi = loadExtension(usageExtension);
 
 	assertPublicSurface(pi, { commands: ["usage"] });
+});
+
+test("usage discovers providers registered before its extension loads", async () => {
+	const providerPi = loadExtension((pi) => {
+		registerUsageProvider(pi as never, {
+			id: "early-provider",
+			label: "Early provider",
+			load: async () => ({ status: "ok" as const }),
+		});
+	});
+	const pi = new FakePi();
+	Object.defineProperty(pi, "events", { value: providerPi.events });
+	usageExtension(pi as never);
+
+	const rendered: string[] = [];
+	const ctx = await createContext();
+	ctx.ui.custom = async (factory: any) => {
+		const view = factory(
+			{ requestRender() {} },
+			ctx.ui.theme,
+			{ matches: () => false },
+			() => {},
+		);
+		rendered.push(...view.render(120));
+		return undefined as never;
+	};
+
+	await runCommand(pi, "usage", "", ctx);
+
+	assert.ok(
+		rendered.join("\n").includes("Early provider"),
+		rendered.join("\n"),
+	);
 });
 
 test("usage command renders subscription and local session usage", async () => {

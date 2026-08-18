@@ -13,6 +13,7 @@ import {
 	renderMeter,
 } from "../components/ui/index.ts";
 import {
+	getRegisteredUsageProviders,
 	registerUsageProvider,
 	USAGE_CONTRACT_VERSION,
 	USAGE_PROVIDER_EVENT,
@@ -797,7 +798,7 @@ function createProviderRegistry(pi: ExtensionAPI): {
 } {
 	const providers = new Map<string, UsageProviderRegistration>();
 	const errors: string[] = [];
-	pi.events.on(USAGE_PROVIDER_EVENT, (value) => {
+	const handleRegistration = (value: unknown) => {
 		if (!validRegistration(value)) {
 			const message = registrationErrorMessage(value);
 			errors.push(message);
@@ -810,8 +811,12 @@ function createProviderRegistry(pi: ExtensionAPI): {
 			);
 		}
 		providers.set(value.id, value);
-	});
+	};
+	pi.events.on(USAGE_PROVIDER_EVENT, handleRegistration);
 
+	for (const registration of getRegisteredUsageProviders(pi)) {
+		handleRegistration(registration);
+	}
 	for (const provider of builtInProviders) {
 		registerUsageProvider(pi, provider);
 	}

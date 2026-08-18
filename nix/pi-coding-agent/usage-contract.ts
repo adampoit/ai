@@ -6,6 +6,34 @@ import type {
 export const USAGE_CONTRACT_VERSION = 1 as const;
 export const USAGE_PROVIDER_EVENT = "usage:register-provider" as const;
 
+const USAGE_PROVIDER_REGISTRY = Symbol.for(
+	"pi-coding-agent.usage-provider-registry",
+);
+
+type UsageProviderRegistryState = {
+	registrations: unknown[];
+};
+
+type UsageProviderEventBus = ExtensionAPI["events"] & {
+	[key: symbol]: unknown;
+};
+
+function getUsageProviderRegistry(
+	pi: ExtensionAPI,
+): UsageProviderRegistryState {
+	const events = pi.events as UsageProviderEventBus;
+	const existing = events[USAGE_PROVIDER_REGISTRY];
+	if (existing && typeof existing === "object") {
+		return existing as UsageProviderRegistryState;
+	}
+
+	const registry: UsageProviderRegistryState = { registrations: [] };
+	Object.defineProperty(events, USAGE_PROVIDER_REGISTRY, {
+		value: registry,
+	});
+	return registry;
+}
+
 export type UsageValueFormat =
 	| "text"
 	| "count"
@@ -78,12 +106,20 @@ export type UsageTableColumn = {
 	align?: "left" | "right";
 };
 
+export function getRegisteredUsageProviders(
+	pi: ExtensionAPI,
+): readonly unknown[] {
+	return [...getUsageProviderRegistry(pi).registrations];
+}
+
 export function registerUsageProvider(
 	pi: ExtensionAPI,
 	registration: UsageProviderRegistrationInput,
 ): void {
-	pi.events.emit(USAGE_PROVIDER_EVENT, {
+	const value = {
 		...registration,
 		contractVersion: USAGE_CONTRACT_VERSION,
-	});
+	};
+	getUsageProviderRegistry(pi).registrations.push(value);
+	pi.events.emit(USAGE_PROVIDER_EVENT, value);
 }
