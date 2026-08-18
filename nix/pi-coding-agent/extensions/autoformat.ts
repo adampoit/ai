@@ -452,7 +452,7 @@ function getToolPath(toolName: string, input: unknown): string | undefined {
 
 function getFormatter(path: string): string[] | undefined {
 	const base = path.split(/[\\/]/).pop() ?? "";
-	if (base === "flake.lock") return ["nix", "fmt"];
+	if (base === "flake.lock") return undefined;
 	return formatterByExtension[extname(path).toLowerCase()];
 }
 
@@ -698,12 +698,12 @@ async function resolveFormatter(
 			findLocalPrettier(file, cwd) ??
 			command;
 	if (command === "alejandra") {
-		if (formatterCache.nixFormatter) {
-			command = formatterCache.nixFormatter.path;
-			args = [];
-		} else if (formatterCache.nixFormatter === undefined) {
-			const flakeNix = findFlakeNix(file, cwd);
-			if (flakeNix && flakeHasFormatter(flakeNix)) {
+		const flakeNix = findFlakeNix(file, cwd);
+		if (flakeNix && flakeHasFormatter(flakeNix)) {
+			if (formatterCache.nixFormatter) {
+				command = formatterCache.nixFormatter.path;
+				args = [];
+			} else {
 				command = "nix";
 				args = ["fmt", "--"];
 			}
