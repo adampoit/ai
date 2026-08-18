@@ -13,7 +13,7 @@
 		"@earendil-works/pi-tui": "0.83.0",
 		"@types/node": "25.7.0",
 		"pi-web-access": "0.13.0",
-		"shell-use": "0.0.1-beta.3",
+		"@microsoft/tui-test": "0.1.0-beta.1",
 		"tsx": "4.22.4",
 		"typebox": "1.1.38",
 		"typescript": "6.0.3"
