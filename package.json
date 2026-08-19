@@ -7,13 +7,13 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"devDependencies": {
-		"@earendil-works/pi-agent-core": "0.83.0",
-		"@earendil-works/pi-ai": "0.83.0",
-		"@earendil-works/pi-coding-agent": "0.83.0",
-		"@earendil-works/pi-tui": "0.83.0",
+		"@earendil-works/pi-agent-core": "0.84.2",
+		"@earendil-works/pi-ai": "0.84.2",
+		"@earendil-works/pi-coding-agent": "0.84.2",
+		"@earendil-works/pi-tui": "0.84.2",
+		"@microsoft/tui-test": "0.1.0-beta.1",
 		"@types/node": "25.7.0",
 		"pi-web-access": "0.13.0",
-		"@microsoft/tui-test": "0.1.0-beta.1",
 		"tsx": "4.22.4",
 		"typebox": "1.1.38",
 		"typescript": "6.0.3"
