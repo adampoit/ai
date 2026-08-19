@@ -12,31 +12,90 @@ import {
 	renderBadge,
 	renderMeter,
 } from "../components/ui/index.ts";
-// ── shared quota types ────────────────────────────────────────────────
+import {
+	getRegisteredUsageProviders,
+	registerUsageProvider,
+	USAGE_CONTRACT_VERSION,
+	USAGE_PROVIDER_EVENT,
+	type UsageMetric,
+	type UsageProviderContext,
+	type UsageProviderRegistration,
+	type UsageProviderRegistrationInput,
+	type UsageSnapshot,
+	type UsageTable,
+	type UsageTableColumn,
+	type UsageValueFormat,
+	type UsageWindow,
+} from "../usage-contract.ts";
 
-export type UsageWindow = {
-	label: string;
-	used?: number;
-	total?: number;
-	remaining?: number;
-	percentRemaining?: number;
-	resetAt?: string;
-	durationMs?: number;
-	unlimited?: boolean;
-	/** Dollar cost, e.g. AI credits ÷ 100 */
-	cost?: number;
-};
+export type {
+	UsageMetric,
+	UsageProviderContext,
+	UsageProviderRegistration,
+	UsageProviderRegistrationInput,
+	UsageSnapshot,
+	UsageTable,
+	UsageTableColumn,
+	UsageValueFormat,
+	UsageWindow,
+} from "../usage-contract.ts";
 
-export type ProviderUsage = {
-	provider: string;
-	status: "ok" | "unavailable" | "error";
-	message?: string;
-	windows?: UsageWindow[];
-};
-
+export type ProviderUsage = UsageSnapshot;
 export type QuotaStatus = "ok" | "warn" | "error";
 
-// ── shared quota helpers ──────────────────────────────────────────────
+const REQUEST_TIMEOUT_MS = 12_000;
+const DEFAULT_PROVIDER_TIMEOUT_MS = 12_000;
+const MAX_PROVIDER_TIMEOUT_MS = 60_000;
+const MAX_MESSAGE_LENGTH = 240;
+const MAX_TABLE_ROWS = 10;
+const OPENAI_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
+const OPENCODE_GO_DASHBOARD_PREFIX = "https://opencode.ai/workspace/";
+const OPENCODE_GO_DASHBOARD_SUFFIX = "/go";
+
+type JsonObject = Record<string, unknown>;
+
+type UsageProviderView = {
+	id: string;
+	label: string;
+	description?: string;
+	loading: boolean;
+	snapshot: UsageSnapshot;
+};
+
+function isObject(value: unknown): value is JsonObject {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function nested(value: unknown, path: string[]): unknown {
+	let current = value;
+	for (const part of path) {
+		if (!isObject(current)) return undefined;
+		current = current[part];
+	}
+	return current;
+}
+
+function clampPercent(value: number | undefined): number | undefined {
+	if (value === undefined || !Number.isFinite(value)) return undefined;
+	return Math.max(0, Math.min(100, value));
+}
+
+function formatCount(count: number): string {
+	if (count < 1000) return count.toString();
+	if (count < 1_000_000) return `${(count / 1000).toFixed(1)}k`;
+	return `${(count / 1_000_000).toFixed(2)}M`;
+}
+
+function formatCurrency(value: number): string {
+	if (value === 0) return "$0.00";
+	if (Math.abs(value) < 0.01) return `$${value.toFixed(4)}`;
+	return `$${value.toFixed(2)}`;
+}
+
+function safeMessage(value: unknown, fallback: string): string {
+	if (typeof value !== "string" || !value.trim()) return fallback;
+	return value.replace(/\s+/g, " ").trim().slice(0, MAX_MESSAGE_LENGTH);
+}
 
 function quotaDurationMs(window: UsageWindow): number | undefined {
 	if (
@@ -147,71 +206,10 @@ export function quotaBar(
 	width: number,
 ): string {
 	if (percentRemaining === undefined) return "·".repeat(width);
-	const clamp = (v: number) => Math.max(0, Math.min(100, v));
+	const clamp = (value: number) => Math.max(0, Math.min(100, value));
 	const used = clamp(100 - percentRemaining);
 	const filled = Math.round((used / 100) * width);
 	return `${"█".repeat(filled)}${"░".repeat(width - filled)}`;
-}
-
-// ── constants ─────────────────────────────────────────────────────────
-
-const REQUEST_TIMEOUT_MS = 12_000;
-const OPENAI_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
-const COPILOT_USER_URL = "https://api.github.com/copilot_internal/user";
-const OPENCODE_GO_DASHBOARD_PREFIX = "https://opencode.ai/workspace/";
-const OPENCODE_GO_DASHBOARD_SUFFIX = "/go";
-
-type JsonObject = Record<string, unknown>;
-
-function isObject(value: unknown): value is JsonObject {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function nested(value: unknown, path: string[]): unknown {
-	let current = value;
-	for (const part of path) {
-		if (!isObject(current)) return undefined;
-		current = current[part];
-	}
-	return current;
-}
-
-function firstNumber(value: unknown, paths: string[][]): number | undefined {
-	for (const path of paths) {
-		const item = nested(value, path);
-		if (typeof item === "number" && Number.isFinite(item)) return item;
-	}
-}
-
-function firstString(value: unknown, paths: string[][]): string | undefined {
-	for (const path of paths) {
-		const item = nested(value, path);
-		if (typeof item === "string" && item.trim()) return item.trim();
-	}
-}
-
-function firstBoolean(value: unknown, paths: string[][]): boolean | undefined {
-	for (const path of paths) {
-		const item = nested(value, path);
-		if (typeof item === "boolean") return item;
-	}
-}
-
-function clampPercent(value: number | undefined): number | undefined {
-	if (value === undefined || !Number.isFinite(value)) return undefined;
-	return Math.max(0, Math.min(100, value));
-}
-
-function formatCount(count: number): string {
-	if (count < 1000) return count.toString();
-	if (count < 1000000) return `${(count / 1000).toFixed(1)}k`;
-	return `${(count / 1000000).toFixed(2)}M`;
-}
-
-function formatCurrency(value: number): string {
-	if (value === 0) return "$0.00";
-	if (value < 0.01) return `$${value.toFixed(4)}`;
-	return `$${value.toFixed(2)}`;
 }
 
 function configPathCandidates(): string[] {
@@ -258,63 +256,69 @@ function localSessionUsage(ctx: ExtensionCommandContext): string {
 	].join("\n");
 }
 
+async function fetchWithTimeout<T>(
+	signal: AbortSignal | undefined,
+	operation: (requestSignal: AbortSignal) => Promise<T>,
+): Promise<T> {
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+	const abort = () => controller.abort(signal?.reason);
+	if (signal?.aborted) abort();
+	else signal?.addEventListener("abort", abort, { once: true });
+	try {
+		return await operation(controller.signal);
+	} finally {
+		clearTimeout(timeout);
+		signal?.removeEventListener("abort", abort);
+	}
+}
+
 async function fetchText(
 	url: string,
 	headers: Record<string, string>,
+	signal?: AbortSignal,
 ): Promise<{ ok: true; text: string } | { ok: false; message: string }> {
-	const controller = new AbortController();
-	const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 	try {
-		const response = await fetch(url, {
-			headers,
-			signal: controller.signal,
+		return await fetchWithTimeout(signal, async (requestSignal) => {
+			const response = await fetch(url, {
+				headers,
+				signal: requestSignal,
+			});
+			const text = await response.text();
+			if (!response.ok) {
+				return { ok: false, message: `HTTP ${response.status}` };
+			}
+			return { ok: true, text };
 		});
-		const text = await response.text();
-		if (!response.ok) {
-			return {
-				ok: false,
-				message: `HTTP ${response.status}${text ? `: ${text.replace(/\s+/g, " ").slice(0, 160)}` : ""}`,
-			};
-		}
-		return { ok: true, text };
 	} catch (error) {
 		return {
 			ok: false,
 			message: error instanceof Error ? error.message : String(error),
 		};
-	} finally {
-		clearTimeout(timeout);
 	}
 }
 
 async function fetchJson(
 	url: string,
 	headers: Record<string, string>,
+	signal?: AbortSignal,
 ): Promise<{ ok: true; data: unknown } | { ok: false; message: string }> {
-	const controller = new AbortController();
-	const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 	try {
-		const response = await fetch(url, {
-			headers,
-			signal: controller.signal,
+		return await fetchWithTimeout(signal, async (requestSignal) => {
+			const response = await fetch(url, {
+				headers,
+				signal: requestSignal,
+			});
+			if (!response.ok) {
+				return { ok: false, message: `HTTP ${response.status}` };
+			}
+			return { ok: true, data: await response.json() };
 		});
-		if (!response.ok) {
-			const text = (await response.text())
-				.replace(/\s+/g, " ")
-				.slice(0, 160);
-			return {
-				ok: false,
-				message: `HTTP ${response.status}${text ? `: ${text}` : ""}`,
-			};
-		}
-		return { ok: true, data: await response.json() };
 	} catch (error) {
 		return {
 			ok: false,
 			message: error instanceof Error ? error.message : String(error),
 		};
-	} finally {
-		clearTimeout(timeout);
 	}
 }
 
@@ -325,54 +329,63 @@ type LegacyAuthStorage = {
 	get?: (key: string) => StoredCredential;
 };
 
+type ModelRegistry = ExtensionContext["modelRegistry"];
+
 function legacyAuthStorage(
-	ctx: ExtensionContext,
+	modelRegistry: ModelRegistry,
 ): LegacyAuthStorage | undefined {
 	return (
-		ctx.modelRegistry as typeof ctx.modelRegistry & {
-			authStorage?: LegacyAuthStorage;
-		}
+		modelRegistry as ModelRegistry & { authStorage?: LegacyAuthStorage }
 	).authStorage;
 }
 
-function authKeysMatching(ctx: ExtensionContext, patterns: RegExp[]): string[] {
-	const legacyKeys = legacyAuthStorage(ctx)?.list?.();
+function authKeysMatching(
+	modelRegistry: ModelRegistry,
+	patterns: RegExp[],
+): string[] {
+	const legacyKeys = legacyAuthStorage(modelRegistry)?.list?.();
 	const keys = Array.isArray(legacyKeys)
 		? legacyKeys.filter((key): key is string => typeof key === "string")
-		: ctx.modelRegistry.getAll().map((model) => model.provider);
+		: modelRegistry.getAll().map((model) => model.provider);
 	return [...new Set(keys)]
 		.filter((key) => patterns.some((pattern) => pattern.test(key)))
 		.sort();
 }
 
-function storedCredential(ctx: ExtensionContext, key: string) {
-	return legacyAuthStorage(ctx)?.get?.(key) ?? readStoredCredential(key);
+function storedCredential(modelRegistry: ModelRegistry, key: string) {
+	return (
+		legacyAuthStorage(modelRegistry)?.get?.(key) ??
+		readStoredCredential(key)
+	);
 }
 
 export async function openAiUsage(
-	ctx: ExtensionContext,
-): Promise<ProviderUsage> {
+	ctx: UsageProviderContext,
+): Promise<UsageSnapshot> {
+	const now = ctx.now ?? new Date();
 	const keys = [
 		"openai-codex",
 		"openai",
 		"codex",
 		"chatgpt",
 		"opencode",
-		...authKeysMatching(ctx, [/openai/i, /codex/i, /chatgpt/i]),
+		...authKeysMatching(ctx.modelRegistry, [
+			/openai/i,
+			/codex/i,
+			/chatgpt/i,
+		]),
 	].filter((key, index, all) => all.indexOf(key) === index);
 	const credential = keys
-		.map((key) => storedCredential(ctx, key))
+		.map((key) => storedCredential(ctx.modelRegistry, key))
 		.find((candidate) => candidate?.type === "oauth" && candidate.access);
 	if (!credential || credential.type !== "oauth" || !credential.access) {
 		return {
-			provider: "OpenAI",
 			status: "unavailable",
 			message: `No ChatGPT/OpenAI OAuth credential found. Checked: ${keys.join(", ")}.`,
 		};
 	}
 	if (credential.expires && credential.expires < Date.now()) {
 		return {
-			provider: "OpenAI",
 			status: "error",
 			message: "OAuth token is expired; run /login for OpenAI.",
 		};
@@ -385,10 +398,9 @@ export async function openAiUsage(
 	if (typeof credential.accountId === "string")
 		headers["ChatGPT-Account-Id"] = credential.accountId;
 
-	const response = await fetchJson(OPENAI_USAGE_URL, headers);
+	const response = await fetchJson(OPENAI_USAGE_URL, headers, ctx.signal);
 	if (!response.ok)
 		return {
-			provider: "OpenAI",
 			status: "error",
 			message: response.message,
 		};
@@ -400,21 +412,24 @@ export async function openAiUsage(
 		"primary_window",
 	]);
 	const windows = [
-		openAiWindow("primary", primary),
-		openAiWindow("secondary", secondary),
-		openAiWindow("code review", codeReview),
+		openAiWindow("primary", primary, now),
+		openAiWindow("secondary", secondary, now),
+		openAiWindow("code review", codeReview, now),
 	].filter((window): window is UsageWindow => Boolean(window));
 
 	return windows.length > 0
-		? { provider: "OpenAI", status: "ok", windows }
+		? { status: "ok", windows, fetchedAt: now.toISOString() }
 		: {
-				provider: "OpenAI",
 				status: "error",
 				message: "Usage response did not include quota windows.",
 			};
 }
 
-function openAiWindow(label: string, value: unknown): UsageWindow | undefined {
+function openAiWindow(
+	label: string,
+	value: unknown,
+	now: Date,
+): UsageWindow | undefined {
 	if (!isObject(value)) return undefined;
 	const limit = typeof value.limit === "number" ? value.limit : undefined;
 	const remaining =
@@ -430,7 +445,7 @@ function openAiWindow(label: string, value: unknown): UsageWindow | undefined {
 				? new Date(value.reset_at * 1000).toISOString()
 				: typeof value.reset_after_seconds === "number"
 					? new Date(
-							Date.now() + value.reset_after_seconds * 1000,
+							now.getTime() + value.reset_after_seconds * 1000,
 						).toISOString()
 					: undefined;
 	const durationMs =
@@ -526,6 +541,7 @@ function parseOpenCodeGoWindow(
 	html: string,
 	name: "rollingUsage" | "weeklyUsage" | "monthlyUsage",
 	label: string,
+	now: Date,
 ): UsageWindow | undefined {
 	const number = String.raw`(-?\d+(?:\.\d+)?)`;
 	const percentFirst = new RegExp(
@@ -558,12 +574,12 @@ function parseOpenCodeGoWindow(
 		label,
 		percentRemaining: clampPercent(100 - usagePercent),
 		resetAt: new Date(
-			Date.now() + Math.max(0, resetInSec) * 1000,
+			now.getTime() + Math.max(0, resetInSec) * 1000,
 		).toISOString(),
 	};
 }
 
-function genericQuotaWindows(data: unknown): UsageWindow[] {
+function genericQuotaWindows(data: unknown, now: Date): UsageWindow[] {
 	const candidates = isObject(data)
 		? [data, data.quota, data.usage, data.lite, data.go].filter(isObject)
 		: [];
@@ -592,7 +608,7 @@ function genericQuotaWindows(data: unknown): UsageWindow[] {
 						? value.resetAt
 						: typeof value.resetInSec === "number"
 							? new Date(
-									Date.now() + value.resetInSec * 1000,
+									now.getTime() + value.resetInSec * 1000,
 								).toISOString()
 							: undefined;
 			if (usedPercent !== undefined || resetAt) {
@@ -612,8 +628,8 @@ function genericQuotaWindows(data: unknown): UsageWindow[] {
 }
 
 async function probeOpenCodeGoApiKey(
-	ctx: ExtensionContext,
-): Promise<ProviderUsage | undefined> {
+	ctx: UsageProviderContext,
+): Promise<UsageSnapshot | undefined> {
 	const apiKey =
 		(await ctx.modelRegistry.getApiKeyForProvider("opencode-go")) ??
 		(await ctx.modelRegistry.getApiKeyForProvider("opencode"));
@@ -628,32 +644,37 @@ async function probeOpenCodeGoApiKey(
 	];
 	const failures: string[] = [];
 	for (const endpoint of endpoints) {
-		const response = await fetchJson(endpoint, {
-			Authorization: `Bearer ${apiKey}`,
-			Accept: "application/json",
-			"User-Agent": "pi-usage/1.0",
-		});
+		const response = await fetchJson(
+			endpoint,
+			{
+				Authorization: `Bearer ${apiKey}`,
+				Accept: "application/json",
+				"User-Agent": "pi-usage/1.0",
+			},
+			ctx.signal,
+		);
 		if (!response.ok) {
 			failures.push(`${endpoint.split("/").pop()}: ${response.message}`);
 			continue;
 		}
-		const windows = genericQuotaWindows(response.data);
+		const now = ctx.now ?? new Date();
+		const windows = genericQuotaWindows(response.data, now);
 		if (windows.length > 0) {
-			return { provider: "OpenCode Go", status: "ok", windows };
+			return { status: "ok", windows, fetchedAt: now.toISOString() };
 		}
 		failures.push(`${endpoint.split("/").pop()}: no quota fields`);
 	}
 
 	return {
-		provider: "OpenCode Go",
 		status: "unavailable",
 		message: `No API-key quota endpoint discovered (${failures.join("; ")}). Dashboard cookie fallback may still work.`,
 	};
 }
 
 export async function openCodeGoUsage(
-	ctx: ExtensionContext,
-): Promise<ProviderUsage> {
+	ctx: UsageProviderContext,
+): Promise<UsageSnapshot> {
+	const now = ctx.now ?? new Date();
 	const apiProbe = await probeOpenCodeGoApiKey(ctx);
 	if (apiProbe?.status === "ok") return apiProbe;
 
@@ -661,7 +682,6 @@ export async function openCodeGoUsage(
 	if (config.state !== "configured") {
 		return (
 			apiProbe ?? {
-				provider: "OpenCode Go",
 				status: "unavailable",
 				message: config.message,
 			}
@@ -675,361 +695,322 @@ export async function openCodeGoUsage(
 			Cookie: `auth=${config.authCookie}`,
 			"User-Agent": "Mozilla/5.0 pi-usage/1.0",
 		},
+		ctx.signal,
 	);
 	if (!response.ok) {
 		return {
-			provider: "OpenCode Go",
 			status: "error",
 			message: response.message,
 		};
 	}
 
 	const windows = [
-		parseOpenCodeGoWindow(response.text, "rollingUsage", "~5h"),
-		parseOpenCodeGoWindow(response.text, "weeklyUsage", "weekly"),
-		parseOpenCodeGoWindow(response.text, "monthlyUsage", "monthly"),
+		parseOpenCodeGoWindow(response.text, "rollingUsage", "~5h", now),
+		parseOpenCodeGoWindow(response.text, "weeklyUsage", "weekly", now),
+		parseOpenCodeGoWindow(response.text, "monthlyUsage", "monthly", now),
 	].filter((window): window is UsageWindow => Boolean(window));
 
 	return windows.length > 0
-		? { provider: "OpenCode Go", status: "ok", windows }
+		? { status: "ok", windows, fetchedAt: now.toISOString() }
 		: {
-				provider: "OpenCode Go",
 				status: "error",
 				message:
 					"Dashboard did not include recognizable usage windows.",
 			};
 }
 
-type CopilotToken = {
-	token: string;
-	scheme: "bearer" | "token";
-	source: string;
-};
+const builtInProviders: UsageProviderRegistrationInput[] = [
+	{
+		id: "openai",
+		label: "OpenAI",
+		description: "ChatGPT and OpenAI subscription quotas.",
+		load: openAiUsage,
+	},
+	{
+		id: "opencode-go",
+		label: "OpenCode Go",
+		description: "OpenCode Go dashboard or API-key quotas.",
+		timeoutMs: 60_000,
+		load: openCodeGoUsage,
+	},
+];
 
-async function copilotTokens(ctx: ExtensionContext): Promise<CopilotToken[]> {
-	const keys = [
-		"github-copilot",
-		"copilot",
-		"github",
-		...authKeysMatching(ctx, [/github/i, /copilot/i]),
-	].filter((key, index, all) => all.indexOf(key) === index);
-	const tokens = await Promise.all(
-		keys.map(async (key): Promise<CopilotToken[]> => {
-			const credential = storedCredential(ctx, key);
-			if (credential?.type === "oauth") {
-				return [
-					credential.refresh
-						? {
-								token: credential.refresh,
-								scheme: "token" as const,
-								source: `${key}:refresh`,
-							}
-						: undefined,
-					credential.access
-						? {
-								token: credential.access,
-								scheme: "bearer" as const,
-								source: `${key}:access`,
-							}
-						: undefined,
-				].filter((item): item is CopilotToken => Boolean(item));
-			}
-			if (credential?.type === "api_key" && credential.key) {
-				return [
-					{
-						token: credential.key,
-						scheme: "token" as const,
-						source: `${key}:api_key`,
-					},
-				];
-			}
-			const token = await ctx.modelRegistry.getApiKeyForProvider(key);
-			return token
-				? [
-						{
-							token,
-							scheme: "bearer" as const,
-							source: `${key}:resolved`,
-						},
-					]
-				: [];
-		}),
+function debugUsage(message: string, error?: unknown): void {
+	if (
+		process.env.PI_DEBUG !== "1" &&
+		process.env.PI_DEBUG !== "true" &&
+		process.env.DEBUG !== "1" &&
+		process.env.DEBUG !== "true"
+	)
+		return;
+	if (error === undefined) console.debug(`[usage] ${message}`);
+	else console.debug(`[usage] ${message}`, error);
+}
+
+function validRegistration(value: unknown): value is UsageProviderRegistration {
+	if (!isObject(value)) return false;
+	if (value.contractVersion !== USAGE_CONTRACT_VERSION) return false;
+	if (
+		typeof value.id !== "string" ||
+		!/^[a-z0-9][a-z0-9._-]*$/.test(value.id)
+	)
+		return false;
+	if (typeof value.label !== "string" || !value.label.trim()) return false;
+	if (
+		value.description !== undefined &&
+		typeof value.description !== "string"
+	)
+		return false;
+	if (
+		value.timeoutMs !== undefined &&
+		(typeof value.timeoutMs !== "number" ||
+			!Number.isFinite(value.timeoutMs) ||
+			value.timeoutMs <= 0)
+	)
+		return false;
+	return typeof value.load === "function";
+}
+
+function registrationErrorMessage(value: unknown): string {
+	if (!isObject(value))
+		return "Usage provider registration was not an object.";
+	if (value.contractVersion !== USAGE_CONTRACT_VERSION) {
+		return `Usage provider contract version ${String(value.contractVersion)} is not supported.`;
+	}
+	if (
+		typeof value.id !== "string" ||
+		!/^[a-z0-9][a-z0-9._-]*$/.test(value.id)
+	) {
+		return "Usage provider id must be lowercase letters, numbers, dots, underscores, or hyphens.";
+	}
+	if (typeof value.label !== "string" || !value.label.trim()) {
+		return "Usage provider label is required.";
+	}
+	if (typeof value.load !== "function") {
+		return "Usage provider load function is required.";
+	}
+	return "Usage provider registration has invalid fields.";
+}
+
+function createProviderRegistry(pi: ExtensionAPI): {
+	providers: Map<string, UsageProviderRegistration>;
+	errors: string[];
+} {
+	const providers = new Map<string, UsageProviderRegistration>();
+	const errors: string[] = [];
+	const handleRegistration = (value: unknown) => {
+		if (!validRegistration(value)) {
+			const message = registrationErrorMessage(value);
+			errors.push(message);
+			debugUsage(message);
+			return;
+		}
+		if (providers.has(value.id)) {
+			debugUsage(
+				`provider '${value.id}' was replaced by a later registration`,
+			);
+		}
+		providers.set(value.id, value);
+	};
+	pi.events.on(USAGE_PROVIDER_EVENT, handleRegistration);
+
+	for (const registration of getRegisteredUsageProviders(pi)) {
+		handleRegistration(registration);
+	}
+	for (const provider of builtInProviders) {
+		registerUsageProvider(pi, provider);
+	}
+	return { providers, errors };
+}
+
+const usageFormats = new Set<UsageValueFormat>([
+	"text",
+	"count",
+	"currency",
+	"percent",
+	"date",
+]);
+
+function finiteNumber(value: unknown): value is number {
+	return typeof value === "number" && Number.isFinite(value);
+}
+
+function validWindow(value: unknown): value is UsageWindow {
+	if (!isObject(value) || typeof value.label !== "string") return false;
+	for (const key of [
+		"used",
+		"total",
+		"remaining",
+		"percentRemaining",
+		"durationMs",
+		"cost",
+	] as const) {
+		if (value[key] !== undefined && !finiteNumber(value[key])) return false;
+	}
+	if (value.resetAt !== undefined && typeof value.resetAt !== "string")
+		return false;
+	return (
+		value.unlimited === undefined || typeof value.unlimited === "boolean"
 	);
-	return [
-		...tokens.flat(),
-		process.env.COPILOT_GITHUB_TOKEN
-			? {
-					token: process.env.COPILOT_GITHUB_TOKEN,
-					scheme: "token" as const,
-					source: "COPILOT_GITHUB_TOKEN",
-				}
-			: undefined,
-		process.env.GH_TOKEN
-			? {
-					token: process.env.GH_TOKEN,
-					scheme: "token" as const,
-					source: "GH_TOKEN",
-				}
-			: undefined,
-		process.env.GITHUB_TOKEN
-			? {
-					token: process.env.GITHUB_TOKEN,
-					scheme: "token" as const,
-					source: "GITHUB_TOKEN",
-				}
-			: undefined,
-	]
-		.filter((item): item is CopilotToken => Boolean(item))
-		.filter(
-			(item, index, all) =>
-				all.findIndex(
-					(other) =>
-						other.token === item.token &&
-						other.scheme === item.scheme,
-				) === index,
-		);
 }
 
-function copilotAiCreditsWindow(data: unknown): UsageWindow | undefined {
-	// GitHub's new billing model (June 2026) keeps AI-credit data in
-	// premium_models / premium_interactions and sets token_based_billing=true.
-	let obj: JsonObject | undefined;
-	for (const key of ["premium_models", "premium_interactions"] as const) {
-		const candidate = nested(data, ["quota_snapshots", key]);
-		if (isObject(candidate) && candidate.token_based_billing === true) {
-			obj = candidate;
-			break;
-		}
-	}
-	if (!isObject(obj)) return undefined;
-
-	const used =
-		typeof obj.used === "number"
-			? obj.used
-			: typeof obj.quota_used === "number"
-				? obj.quota_used
-				: undefined;
-	const remaining =
-		typeof obj.remaining === "number"
-			? obj.remaining
-			: typeof obj.quota_remaining === "number"
-				? obj.quota_remaining
-				: undefined;
-	const total =
-		typeof obj.entitlement === "number"
-			? obj.entitlement
-			: typeof obj.limit === "number"
-				? obj.limit
-				: typeof obj.total === "number"
-					? obj.total
-					: undefined;
-	const resetAt =
-		typeof obj.reset_at === "string"
-			? obj.reset_at
-			: typeof obj.quota_reset_at === "string"
-				? obj.quota_reset_at
-				: typeof obj.quota_reset_date_utc === "string"
-					? obj.quota_reset_date_utc
-					: undefined;
-	const explicitPercent =
-		typeof obj.percent_remaining === "number"
-			? obj.percent_remaining
-			: typeof obj.quota_percent_remaining === "number"
-				? obj.quota_percent_remaining
-				: undefined;
-
-	const resolvedTotal =
-		total ??
-		(used !== undefined && remaining !== undefined
-			? used + remaining
-			: undefined);
-	const resolvedUsed =
-		used ??
-		(resolvedTotal !== undefined && remaining !== undefined
-			? Math.max(0, resolvedTotal - remaining)
-			: undefined);
-	const percentRemaining =
-		explicitPercent ??
-		(resolvedTotal && resolvedUsed !== undefined
-			? ((resolvedTotal - resolvedUsed) / resolvedTotal) * 100
-			: undefined);
-
+function validMetric(value: unknown): value is UsageMetric {
+	if (!isObject(value) || typeof value.label !== "string") return false;
 	if (
-		resolvedTotal === undefined &&
-		resolvedUsed === undefined &&
-		remaining === undefined
-	) {
-		return undefined;
-	}
-
-	return {
-		label: "ai credits",
-		used: resolvedUsed,
-		total: resolvedTotal,
-		remaining,
-		percentRemaining: clampPercent(percentRemaining),
-		resetAt,
-		unlimited: true,
-		cost: resolvedUsed !== undefined ? resolvedUsed / 100 : undefined,
-	};
+		(typeof value.value !== "string" && !finiteNumber(value.value)) ||
+		(value.format !== undefined &&
+			(typeof value.format !== "string" ||
+				!usageFormats.has(value.format as UsageValueFormat)))
+	)
+		return false;
+	return true;
 }
 
-export async function copilotUsage(
-	ctx: ExtensionContext,
-): Promise<ProviderUsage> {
-	const tokens = await copilotTokens(ctx);
-	if (tokens.length === 0) {
+function validTable(value: unknown): value is UsageTable {
+	if (
+		!isObject(value) ||
+		typeof value.id !== "string" ||
+		(value.title !== undefined && typeof value.title !== "string") ||
+		!Array.isArray(value.columns) ||
+		!Array.isArray(value.rows)
+	)
+		return false;
+	if (
+		!value.columns.every((column) => {
+			if (
+				!isObject(column) ||
+				typeof column.key !== "string" ||
+				typeof column.label !== "string"
+			)
+				return false;
+			return (
+				(column.format === undefined ||
+					(typeof column.format === "string" &&
+						usageFormats.has(column.format as UsageValueFormat))) &&
+				(column.align === undefined ||
+					column.align === "left" ||
+					column.align === "right")
+			);
+		})
+	)
+		return false;
+	return value.rows.every(
+		(row) =>
+			isObject(row) &&
+			Object.values(row).every(
+				(cell) =>
+					cell === null ||
+					typeof cell === "string" ||
+					finiteNumber(cell),
+			),
+	);
+}
+
+function validSnapshot(value: unknown): value is UsageSnapshot {
+	if (!isObject(value)) return false;
+	if (
+		value.status !== "ok" &&
+		value.status !== "unavailable" &&
+		value.status !== "error"
+	)
+		return false;
+	if (value.message !== undefined && typeof value.message !== "string")
+		return false;
+	if (value.fetchedAt !== undefined && typeof value.fetchedAt !== "string")
+		return false;
+	if (
+		value.windows !== undefined &&
+		(!Array.isArray(value.windows) || !value.windows.every(validWindow))
+	)
+		return false;
+	if (
+		value.metrics !== undefined &&
+		(!Array.isArray(value.metrics) || !value.metrics.every(validMetric))
+	)
+		return false;
+	if (
+		value.tables !== undefined &&
+		(!Array.isArray(value.tables) || !value.tables.every(validTable))
+	)
+		return false;
+	return true;
+}
+
+async function invokeProvider(
+	pi: ExtensionAPI,
+	registration: UsageProviderRegistration,
+	ctx: ExtensionCommandContext,
+	refresh: boolean,
+	parentSignal?: AbortSignal,
+): Promise<UsageSnapshot> {
+	const timeoutMs = Math.min(
+		Math.max(1, registration.timeoutMs ?? DEFAULT_PROVIDER_TIMEOUT_MS),
+		MAX_PROVIDER_TIMEOUT_MS,
+	);
+	const controller = new AbortController();
+	let timedOut = false;
+	const timeout = setTimeout(() => {
+		timedOut = true;
+		controller.abort();
+	}, timeoutMs);
+	const parentSignals = [ctx.signal, parentSignal].filter(
+		(signal): signal is AbortSignal => signal !== undefined,
+	);
+	const parentAbort = () => {
+		const reason = parentSignals.find((signal) => signal.aborted)?.reason;
+		controller.abort(reason);
+	};
+	for (const signal of parentSignals) {
+		if (signal.aborted) parentAbort();
+		else signal.addEventListener("abort", parentAbort, { once: true });
+	}
+
+	try {
+		const snapshot = await registration.load({
+			signal: controller.signal,
+			refresh,
+			now: new Date(),
+			mode: ctx.mode,
+			cwd: ctx.cwd,
+			exec: pi.exec,
+			modelRegistry: ctx.modelRegistry,
+		});
+		if (timedOut) {
+			return {
+				status: "error",
+				message: `Provider timed out after ${timeoutMs}ms.`,
+			};
+		}
+		if (!validSnapshot(snapshot)) {
+			return {
+				status: "error",
+				message: "Provider returned an invalid usage snapshot.",
+			};
+		}
 		return {
-			provider: "GitHub Copilot",
-			status: "unavailable",
+			...snapshot,
 			message:
-				"No GitHub/Copilot token found in Pi auth or GitHub token environment variables.",
+				snapshot.message === undefined
+					? undefined
+					: safeMessage(
+							snapshot.message,
+							"Provider returned an error.",
+						),
 		};
-	}
-
-	let response: Awaited<ReturnType<typeof fetchJson>> | undefined;
-	for (const token of tokens) {
-		response = await fetchJson(COPILOT_USER_URL, {
-			Authorization: `${token.scheme === "token" ? "token" : "Bearer"} ${token.token}`,
-			Accept: "application/vnd.github+json",
-			"X-GitHub-Api-Version": "2026-03-10",
-			"User-Agent": "GitHubCopilotChat/0.47.1",
-			"X-Vscode-User-Agent-Library-Version": "electron-fetch",
-		});
-		if (response.ok) break;
-	}
-	if (!response?.ok)
+	} catch (error) {
+		debugUsage(`provider '${registration.id}' failed`, error);
 		return {
-			provider: "GitHub Copilot",
 			status: "error",
-			message: `${response?.message ?? "Unknown error"}. Tried ${tokens.length} token source(s); Copilot model access tokens are not accepted by GitHub REST quota endpoints, but the original GitHub OAuth token should be.`,
+			message: timedOut
+				? `Provider timed out after ${timeoutMs}ms.`
+				: "Provider failed while loading usage.",
 		};
-
-	const total = firstNumber(response.data, [
-		["quota", "limit"],
-		["quota", "total"],
-		["monthly_quota", "limit"],
-		["monthly_premium_requests", "limit"],
-		["premium_requests", "limit"],
-		["quota_snapshots", "premium_models", "entitlement"],
-		["quota_snapshots", "premium_interactions", "entitlement"],
-		["limit"],
-		["quota_limit"],
-	]);
-	const used = firstNumber(response.data, [
-		["quota", "used"],
-		["monthly_quota", "used"],
-		["monthly_premium_requests", "used"],
-		["premium_requests", "used"],
-		["used"],
-		["quota_used"],
-		["premium_requests_used"],
-	]);
-	const remaining = firstNumber(response.data, [
-		["quota", "remaining"],
-		["monthly_quota", "remaining"],
-		["monthly_premium_requests", "remaining"],
-		["premium_requests", "remaining"],
-		["quota_snapshots", "premium_models", "remaining"],
-		["quota_snapshots", "premium_interactions", "remaining"],
-		["remaining"],
-		["quota_remaining"],
-	]);
-	const resetAt = firstString(response.data, [
-		["quota", "reset_at"],
-		["monthly_quota", "reset_at"],
-		["monthly_premium_requests", "reset_at"],
-		["premium_requests", "reset_at"],
-		["reset_at"],
-		["quota_reset_date_utc"],
-		["quota_reset_date"],
-		["quota_reset_at"],
-	]);
-	const explicitPercent = firstNumber(response.data, [
-		["quota", "percent_remaining"],
-		["monthly_quota", "percent_remaining"],
-		["monthly_premium_requests", "percent_remaining"],
-		["premium_requests", "percent_remaining"],
-		["quota_snapshots", "premium_models", "percent_remaining"],
-		["quota_snapshots", "premium_interactions", "percent_remaining"],
-		["percent_remaining"],
-	]);
-	const unlimited = firstBoolean(response.data, [
-		["quota", "unlimited"],
-		["monthly_quota", "unlimited"],
-		["monthly_premium_requests", "unlimited"],
-		["premium_requests", "unlimited"],
-		["quota_snapshots", "premium_models", "unlimited"],
-		["quota_snapshots", "premium_interactions", "unlimited"],
-		["unlimited"],
-	]);
-	const tokenBasedBilling = firstBoolean(response.data, [
-		["quota_snapshots", "premium_models", "token_based_billing"],
-		["quota_snapshots", "premium_interactions", "token_based_billing"],
-		["token_based_billing"],
-	]);
-
-	const resolvedTotal =
-		total ??
-		(used !== undefined && remaining !== undefined
-			? used + remaining
-			: undefined);
-	const resolvedUsed =
-		used ??
-		(resolvedTotal !== undefined && remaining !== undefined
-			? Math.max(0, resolvedTotal - remaining)
-			: undefined);
-	const percentRemaining =
-		explicitPercent ??
-		(resolvedTotal && resolvedUsed !== undefined
-			? ((resolvedTotal - resolvedUsed) / resolvedTotal) * 100
-			: undefined);
-
-	if (
-		unlimited !== true &&
-		tokenBasedBilling !== true &&
-		resolvedTotal === undefined &&
-		resolvedUsed === undefined &&
-		remaining === undefined
-	) {
-		return {
-			provider: "GitHub Copilot",
-			status: "error",
-			message: "Usage response did not include quota fields.",
-		};
-	}
-
-	const windows: UsageWindow[] = [];
-	const aiCreditsWindow = copilotAiCreditsWindow(response.data);
-	if (aiCreditsWindow) {
-		// The snapshot-level object has no reset_at; fall back to the root
-		// quota_reset_date when the window itself is missing one.
-		if (!aiCreditsWindow.resetAt && resetAt) {
-			aiCreditsWindow.resetAt = resetAt;
+	} finally {
+		clearTimeout(timeout);
+		for (const signal of parentSignals) {
+			signal.removeEventListener("abort", parentAbort);
 		}
-		windows.push(aiCreditsWindow);
-	} else if (
-		unlimited ||
-		resolvedTotal !== undefined ||
-		resolvedUsed !== undefined ||
-		remaining !== undefined
-	) {
-		windows.push({
-			label:
-				tokenBasedBilling === true ? "ai credits" : "premium requests",
-			used: resolvedUsed,
-			total: resolvedTotal,
-			remaining,
-			percentRemaining: clampPercent(percentRemaining),
-			resetAt,
-			unlimited: unlimited === true || tokenBasedBilling === true,
-		});
 	}
-	return {
-		provider: "GitHub Copilot",
-		status: "ok",
-		windows,
-	};
 }
 
 function windowParts(window: UsageWindow): string[] {
@@ -1056,27 +1037,21 @@ function windowParts(window: UsageWindow): string[] {
 	].filter((part): part is string => Boolean(part));
 }
 
-function usageStatus(result: ProviderUsage): "ok" | "warn" | "error" {
-	if (result.status === "error") return "error";
-	if (result.status === "unavailable") return "warn";
-	const windows = result.windows ?? [];
-	// Prefer burn rate when available
-	const limiting = limitingWindow(result.provider, windows);
+function usageStatus(snapshot: UsageSnapshot, label: string): QuotaStatus {
+	if (snapshot.status === "error") return "error";
+	if (snapshot.status === "unavailable") return "warn";
+	const windows = snapshot.windows ?? [];
+	const limiting = limitingWindow(label, windows);
 	if (limiting) {
-		const pace = quotaPace(result.provider, limiting);
-		if (pace !== undefined) {
-			const status = paceColor(pace);
-			if (status !== "ok") return status;
-			return "ok";
-		}
+		const pace = quotaPace(label, limiting);
+		if (pace !== undefined) return paceColor(pace);
 	}
-	// Fallback: simple percentage thresholds
 	const remaining = windows
 		.filter((window) => !window.unlimited)
-		.map((w) => w.percentRemaining)
-		.filter((v): v is number => v !== undefined);
-	if (remaining.some((v) => v <= 10)) return "error";
-	if (remaining.some((v) => v <= 25)) return "warn";
+		.map((window) => window.percentRemaining)
+		.filter((value): value is number => value !== undefined);
+	if (remaining.some((value) => value <= 10)) return "error";
+	if (remaining.some((value) => value <= 25)) return "warn";
 	return "ok";
 }
 
@@ -1087,8 +1062,139 @@ function windowBarColor(provider: string, window: UsageWindow): string {
 	if (status === "warn") return "warning";
 	return "success";
 }
+
+function formatDateValue(value: string): string {
+	const date = new Date(value);
+	if (!Number.isFinite(date.getTime())) return value;
+	return new Intl.DateTimeFormat(undefined, {
+		year: "numeric",
+		month: "short",
+		day: "numeric",
+	}).format(date);
+}
+
+function formatDateTimeValue(value: string): string {
+	const date = new Date(value);
+	if (!Number.isFinite(date.getTime())) return value;
+	return new Intl.DateTimeFormat(undefined, {
+		year: "numeric",
+		month: "short",
+		day: "numeric",
+		hour: "numeric",
+		minute: "2-digit",
+		timeZoneName: "short",
+	}).format(date);
+}
+
+function formatUsageValue(
+	value: string | number | null | undefined,
+	format: UsageValueFormat = "text",
+): string {
+	if (value === null || value === undefined) return "—";
+	if (format === "count" && typeof value === "number")
+		return formatCount(value);
+	if (format === "currency" && typeof value === "number")
+		return formatCurrency(value);
+	if (format === "percent" && typeof value === "number")
+		return `${value.toFixed(value % 1 === 0 ? 0 : 1)}%`;
+	if (format === "date") return formatDateValue(String(value));
+	return String(value);
+}
+
+function renderMetric(metric: UsageMetric): string {
+	return `${metric.label}: ${formatUsageValue(metric.value, metric.format)}`;
+}
+
+function alignTableCell(value: string, width: number, align: "left" | "right") {
+	const truncated = truncateToWidth(value, width);
+	if (align === "right") return truncated.padStart(width, " ");
+	return truncated.padEnd(width, " ");
+}
+
+function renderTable(
+	table: UsageTable,
+	contentWidth: number,
+	theme: any,
+): string[] {
+	const columns = table.columns.filter(
+		(column): column is UsageTableColumn =>
+			typeof column.key === "string" && typeof column.label === "string",
+	);
+	if (columns.length === 0) return [];
+
+	const rows = table.rows.slice(0, MAX_TABLE_ROWS);
+	const values = [
+		columns.map((column) => column.label),
+		...rows.map((row) =>
+			columns.map((column) =>
+				formatUsageValue(row[column.key], column.format),
+			),
+		),
+	];
+	const widths = columns.map((_, index) =>
+		Math.max(...values.map((row) => row[index].length), 1),
+	);
+	const separatorWidth = Math.max(0, columns.length - 1) * 3;
+	const availableWidth = Math.max(
+		columns.length,
+		contentWidth - 4 - separatorWidth,
+	);
+	while (widths.reduce((total, width) => total + width, 0) > availableWidth) {
+		const largest = widths.indexOf(Math.max(...widths));
+		if (widths[largest] <= 4) break;
+		widths[largest] -= 1;
+	}
+
+	const rowText = (row: string[]) =>
+		row
+			.map((value, index) =>
+				alignTableCell(
+					value,
+					widths[index],
+					columns[index].align ??
+						(columns[index].format &&
+						columns[index].format !== "text"
+							? "right"
+							: "left"),
+				),
+			)
+			.join(" | ");
+
+	const lines = [
+		truncateToWidth(
+			`  ${theme.fg("dim", table.title ?? table.id)}`,
+			contentWidth,
+		),
+		truncateToWidth(`  ${rowText(values[0])}`, contentWidth),
+		truncateToWidth(
+			`  ${widths.map((width) => "─".repeat(width)).join("─┼─")}`,
+			contentWidth,
+		),
+	];
+	if (rows.length === 0) {
+		lines.push(truncateToWidth("  (no rows)", contentWidth));
+	} else {
+		lines.push(
+			...values
+				.slice(1)
+				.map((row) =>
+					truncateToWidth(`  ${rowText(row)}`, contentWidth),
+				),
+		);
+	}
+	if (table.rows.length > MAX_TABLE_ROWS) {
+		lines.push(
+			truncateToWidth(
+				`  … ${table.rows.length - MAX_TABLE_ROWS} more rows omitted`,
+				contentWidth,
+			),
+		);
+	}
+	return lines;
+}
+
 function renderUsageContent(
-	providers: ProviderUsage[],
+	providers: UsageProviderView[],
 	localUsage: string,
 	theme: any,
 ) {
@@ -1096,18 +1202,24 @@ function renderUsageContent(
 		invalidate() {},
 		render(contentWidth: number): string[] {
 			const meterWidth = Math.max(8, Math.min(24, contentWidth - 34));
-			const lines = [theme.fg("dim", "Subscription quotas")];
+			const lines = [theme.fg("dim", "Subscription quotas and usage")];
 
 			for (const provider of providers) {
-				const status = usageStatus(provider);
-				const statusColor =
-					status === "ok"
+				const status = provider.loading
+					? "loading"
+					: usageStatus(provider.snapshot, provider.label);
+				const statusColor = provider.loading
+					? gruvbox.aqua
+					: status === "ok"
 						? gruvbox.green
 						: status === "warn"
 							? gruvbox.yellow
 							: gruvbox.red;
-				const statusText =
-					provider.status === "ok" ? status : provider.status;
+				const statusText = provider.loading
+					? "loading"
+					: provider.snapshot.status === "ok"
+						? status
+						: provider.snapshot.status;
 				const statusBadge = renderBadge({
 					text: statusText,
 					fg: gruvbox.bg,
@@ -1116,22 +1228,32 @@ function renderUsageContent(
 				});
 				lines.push(
 					truncateToWidth(
-						`${statusBadge} ${theme.fg("customMessageLabel", provider.provider)}`,
+						`${statusBadge} ${theme.fg("customMessageLabel", provider.label)}`,
 						contentWidth,
 					),
 				);
 
-				if (provider.status !== "ok") {
+				if (provider.loading) {
 					lines.push(
 						truncateToWidth(
-							`  ${theme.fg("muted", provider.message ?? "No usage available")}`,
+							`  ${theme.fg("muted", "Loading…")}`,
 							contentWidth,
 						),
 					);
 					continue;
 				}
 
-				for (const window of provider.windows ?? []) {
+				if (provider.snapshot.status !== "ok") {
+					lines.push(
+						truncateToWidth(
+							`  ${theme.fg("muted", provider.snapshot.message ?? "No usage available")}`,
+							contentWidth,
+						),
+					);
+					continue;
+				}
+
+				for (const window of provider.snapshot.windows ?? []) {
 					const resetDateText = resetDate(window);
 					const parts =
 						[
@@ -1157,7 +1279,7 @@ function renderUsageContent(
 								? undefined
 								: 1 - window.percentRemaining / 100,
 						width: meterWidth,
-						fg: windowBarColor(provider.provider, window),
+						fg: windowBarColor(provider.label, window),
 						emptyFg: gruvbox.bg3,
 						theme,
 					});
@@ -1175,6 +1297,26 @@ function renderUsageContent(
 						),
 					);
 				}
+
+				for (const metric of provider.snapshot.metrics ?? []) {
+					lines.push(
+						truncateToWidth(
+							`  ${renderMetric(metric)}`,
+							contentWidth,
+						),
+					);
+				}
+				for (const table of provider.snapshot.tables ?? []) {
+					lines.push(...renderTable(table, contentWidth, theme));
+				}
+				if (provider.snapshot.fetchedAt) {
+					lines.push(
+						truncateToWidth(
+							`  ${theme.fg("dim", `updated ${formatDateTimeValue(provider.snapshot.fetchedAt)}`)}`,
+							contentWidth,
+						),
+					);
+				}
 			}
 
 			lines.push("", theme.fg("dim", "Local Pi session usage"));
@@ -1187,6 +1329,7 @@ function renderUsageContent(
 		},
 	};
 }
+
 function decodePlaywrightString(value: string): string {
 	try {
 		const parsed = JSON.parse(value) as unknown;
@@ -1260,10 +1403,12 @@ async function writeOpenCodeGoConfig(
 }
 
 export default function usageExtension(pi: ExtensionAPI) {
+	const registry = createProviderRegistry(pi);
+
 	pi.registerCommand("usage", {
-		description: "Show AI subscription quota and local Pi token usage",
+		description: "Show AI subscription quota and usage data",
 		getArgumentCompletions: (prefix) => {
-			const commands = ["auth opencode-go"];
+			const commands = ["--refresh", "auth opencode-go"];
 			const matches = commands.filter((command) =>
 				command.startsWith(prefix),
 			);
@@ -1272,7 +1417,8 @@ export default function usageExtension(pi: ExtensionAPI) {
 				: null;
 		},
 		handler: async (args, ctx) => {
-			if (args.trim() === "auth opencode-go") {
+			const trimmedArgs = args.trim();
+			if (trimmedArgs === "auth opencode-go") {
 				ctx.ui.notify("Opening OpenCode in a browser…", "info");
 				const opened = await pi.exec(
 					"playwright-cli",
@@ -1337,80 +1483,163 @@ export default function usageExtension(pi: ExtensionAPI) {
 				return;
 			}
 
-			const providers = await Promise.all([
-				openAiUsage(ctx),
-				copilotUsage(ctx),
-				openCodeGoUsage(ctx),
-			]);
-			const localUsage = localSessionUsage(ctx);
+			if (trimmedArgs !== "" && trimmedArgs !== "--refresh") {
+				ctx.ui.notify("Usage: /usage [--refresh]", "error");
+				return;
+			}
 
-			await ctx.ui.custom<void>(
-				(tui, theme, kb, done) => {
-					const content = renderUsageContent(
-						providers,
-						localUsage,
-						theme,
-					);
-					return {
-						render(width: number) {
-							return new BlockFrame(
-								{
-									invalidate() {},
-									render(contentWidth: number) {
-										const help = new KeyHintLine(
-											[
+			const refresh = trimmedArgs === "--refresh";
+			const providerRegistrations = [...registry.providers.values()];
+			const registeredProviderViews: UsageProviderView[] =
+				providerRegistrations.map((provider) => ({
+					id: provider.id,
+					label: provider.label,
+					description: provider.description,
+					loading: true,
+					snapshot: {
+						status: "unavailable" as const,
+						message: "Loading…",
+					},
+				}));
+			const providerViews: UsageProviderView[] = [
+				...registry.errors.map((message, index) => ({
+					id: `registration-error-${index}`,
+					label: "Usage provider registration",
+					loading: false,
+					snapshot: {
+						status: "error" as const,
+						message: safeMessage(
+							message,
+							"Invalid provider registration.",
+						),
+					},
+				})),
+				...registeredProviderViews,
+			];
+			const providerViewsByProvider = new Map(
+				providerRegistrations.map((provider, index) => [
+					provider,
+					registeredProviderViews[index]!,
+				]),
+			);
+			const localUsage = localSessionUsage(ctx);
+			const providerController = new AbortController();
+			let usageViewActive = true;
+			let requestRender: (() => void) | undefined;
+			const updateProvider = (
+				provider: UsageProviderRegistration,
+				snapshot: UsageSnapshot,
+			) => {
+				if (!usageViewActive) return;
+				const view = providerViewsByProvider.get(provider);
+				if (!view) return;
+				view.loading = false;
+				view.snapshot = snapshot;
+				requestRender?.();
+			};
+
+			for (const provider of providerRegistrations) {
+				void invokeProvider(
+					pi,
+					provider,
+					ctx,
+					refresh,
+					providerController.signal,
+				).then(
+					(snapshot) => updateProvider(provider, snapshot),
+					(error) => {
+						debugUsage(`provider '${provider.id}' failed`, error);
+						updateProvider(provider, {
+							status: "error",
+							message: "Provider failed while loading usage.",
+						});
+					},
+				);
+			}
+
+			try {
+				await ctx.ui.custom<void>(
+					(tui, theme, kb, done) => {
+						requestRender = () => tui.requestRender();
+						const content = renderUsageContent(
+							providerViews,
+							localUsage,
+							theme,
+						);
+						return {
+							render(width: number) {
+								const loadingCount = providerViews.filter(
+									(provider) => provider.loading,
+								).length;
+								return new BlockFrame(
+									{
+										invalidate() {},
+										render(contentWidth: number) {
+											const help = new KeyHintLine(
+												[
+													{
+														key: "esc",
+														label: "close",
+													},
+												],
 												{
-													key: "esc",
-													label: "close",
+													theme,
+													accent: gruvbox.aqua,
+												},
+											).render(contentWidth);
+											const body =
+												content.render(contentWidth);
+											return [...help, "", ...body];
+										},
+									},
+									{
+										title: {
+											title: "AI Usage",
+											icon: "󰚩",
+											accent: gruvbox.aqua,
+											badges: [
+												{
+													text:
+														loadingCount > 0
+															? `${loadingCount} loading`
+															: `${providerViews.length} providers`,
+													bg: gruvbox.bg2,
 												},
 											],
-											{
-												theme,
-												accent: gruvbox.aqua,
-											},
-										).render(contentWidth);
-										const body =
-											content.render(contentWidth);
-										return [...help, "", ...body];
-									},
-								},
-								{
-									title: {
-										title: "AI Usage",
-										icon: "󰚩",
-										accent: gruvbox.aqua,
-										badges: [
-											{
-												text: `${providers.length} providers`,
-												bg: gruvbox.bg2,
-											},
-										],
+											theme,
+										},
+										borderColor: gruvbox.aqua,
+										background: gruvbox.bg1,
 										theme,
+										paddingX: 1,
+										paddingY: 1,
 									},
-									borderColor: gruvbox.aqua,
-									background: gruvbox.bg1,
-									theme,
-									paddingX: 1,
-									paddingY: 1,
-								},
-							).render(width);
-						},
-						invalidate() {},
-						handleInput(data: string) {
-							if (kb.matches(data, "tui.select.cancel")) {
-								done();
-								return;
-							}
-							if (matchesKey(data, Key.enter) || data === "q") {
-								done();
-								return;
-							}
-							tui.requestRender();
-						},
-					};
-				},
-				{ overlay: false },
-			);
+								).render(width);
+							},
+							invalidate() {},
+							handleInput(data: string) {
+								if (kb.matches(data, "tui.select.cancel")) {
+									done();
+									return;
+								}
+								if (
+									matchesKey(data, Key.enter) ||
+									data === "q"
+								) {
+									done();
+									return;
+								}
+								tui.requestRender();
+							},
+						};
+					},
+					{ overlay: false },
+				);
+			} finally {
+				usageViewActive = false;
+				requestRender = undefined;
+				providerController.abort();
+			}
 		},
 	});
 }

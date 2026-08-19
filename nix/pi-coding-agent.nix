@@ -16,7 +16,22 @@
     mkdir -p $out/node_modules/@xterm
     cp -R ${piAgentSource}/components $out/components
     cp -R ${piAgentSource}/extensions $out/extensions
+    cp ${piAgentSource}/usage-contract.ts $out/usage-contract.ts
     cp -R ${xtermHeadless} $out/node_modules/@xterm/headless
+  '';
+
+  usageContractPackage = pkgs.runCommand "pi-usage-contract" {} ''
+    mkdir -p $out
+    cp ${piAgentSource}/usage-contract.ts $out/index.ts
+    cat > $out/package.json <<'EOF'
+    {
+      "name": "usage-contract",
+      "private": true,
+      "type": "module",
+      "main": "./index.ts",
+      "exports": "./index.ts"
+    }
+    EOF
   '';
 
   vscodeLangservers = pkgs.runCommand "vscode-langservers-extracted-node22" {} ''
@@ -251,6 +266,8 @@ in {
       "${piCfg.configDir}/components".source = piAgentDir + "/components";
       "${piCfg.configDir}/extensions".source = piAgentDir + "/extensions";
       "${piCfg.configDir}/node_modules/@xterm/headless".source = xtermHeadless;
+      "${piCfg.configDir}/usage-contract.ts".source = piAgentSource + "/usage-contract.ts";
+      "${piCfg.configDir}/node_modules/usage-contract".source = usageContractPackage;
       "${piCfg.configDir}/skills".source = piSkills;
       "${piCfg.configDir}/prompts".source = ../prompts;
     };

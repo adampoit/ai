@@ -1,16 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import usageExtension, {
-	copilotUsage,
 	openAiUsage,
 	quotaPace,
 	quotaWindowStatus,
 	resetDate,
 	resetEta,
 } from "../../../nix/pi-coding-agent/extensions/usage.ts";
+import { registerUsageProvider } from "../../../nix/pi-coding-agent/usage-contract.ts";
 import {
 	assertPublicSurface,
 	createContext,
+	FakePi,
 	loadExtension,
 	runCommand,
 } from "../helpers.ts";
@@ -19,6 +20,39 @@ test("usage extension registers its public surface", () => {
 	const pi = loadExtension(usageExtension);
 
 	assertPublicSurface(pi, { commands: ["usage"] });
+});
+
+test("usage discovers providers registered before its extension loads", async () => {
+	const providerPi = loadExtension((pi) => {
+		registerUsageProvider(pi as never, {
+			id: "early-provider",
+			label: "Early provider",
+			load: async () => ({ status: "ok" as const }),
+		});
+	});
+	const pi = new FakePi();
+	Object.defineProperty(pi, "events", { value: providerPi.events });
+	usageExtension(pi as never);
+
+	const rendered: string[] = [];
+	const ctx = await createContext();
+	ctx.ui.custom = async (factory: any) => {
+		const view = factory(
+			{ requestRender() {} },
+			ctx.ui.theme,
+			{ matches: () => false },
+			() => {},
+		);
+		rendered.push(...view.render(120));
+		return undefined as never;
+	};
+
+	await runCommand(pi, "usage", "", ctx);
+
+	assert.ok(
+		rendered.join("\n").includes("Early provider"),
+		rendered.join("\n"),
+	);
 });
 
 test("usage command renders subscription and local session usage", async () => {
@@ -57,7 +91,7 @@ test("usage command renders subscription and local session usage", async () => {
 	const output = rendered.join("\n");
 	assert.ok(output.includes("Subscription quotas"), output);
 	assert.ok(output.includes("OpenAI"), output);
-	assert.ok(output.includes("GitHub Copilot"), output);
+	assert.ok(output.includes("OpenCode Go"), output);
 	assert.ok(output.includes("Local Pi session usage"), output);
 	assert.ok(output.includes("3.7k tokens"), output);
 	assert.ok(output.includes("$0.05"), output);
@@ -111,12 +145,20 @@ test("usage renders the reset date after the quota percentage", async () => {
 				: undefined;
 		ctx.ui.custom = async (factory: any, options?: unknown) => {
 			assert.deepEqual(options, { overlay: false });
-			const view = factory(
-				{ requestRender() {} },
+			let view: any;
+			const tui = {
+				requestRender() {
+					rendered.push(...view.render(160));
+				},
+			};
+			view = factory(
+				tui,
 				ctx.ui.theme,
 				{ matches: () => false },
 				() => {},
 			);
+			rendered.push(...view.render(160));
+			await new Promise<void>((resolve) => setImmediate(resolve));
 			rendered.push(...view.render(160));
 			return undefined as never;
 		};
@@ -226,38 +268,147 @@ test("OpenAI supports the model registry without legacy auth storage", async () 
 	}
 });
 
-test("Copilot token-based AI credits are treated as unlimited", async () => {
-	const originalFetch = globalThis.fetch;
-	globalThis.fetch = async () =>
-		new Response(
-			JSON.stringify({
-				quota_snapshots: {
-					premium_models: {
-						token_based_billing: true,
-						entitlement: 100,
-						used: 25,
-						remaining: 75,
+test("registered providers render metrics, bounded tables, and timestamps", async () => {
+	const pi = loadExtension(usageExtension);
+	let refresh = false;
+	const fetchedAt = "2030-01-02T03:04:05.000Z";
+	registerUsageProvider(pi as never, {
+		id: "test-provider",
+		label: "Test provider",
+		load: async (context) => {
+			refresh = context.refresh;
+			return {
+				status: "ok",
+				fetchedAt,
+				metrics: [{ label: "Spend", value: 12.5, format: "currency" }],
+				tables: [
+					{
+						id: "users",
+						columns: [
+							{ key: "name", label: "User" },
+							{
+								key: "spend",
+								label: "Spend",
+								format: "currency",
+							},
+						],
+						rows: [{ name: "Ada", spend: 12.5 }],
 					},
-				},
-			}),
-			{ status: 200 },
-		);
-	try {
-		const ctx = await createContext();
-		ctx.modelRegistry.authStorage.list = () => ["github"];
-		ctx.modelRegistry.authStorage.get = () => ({
-			type: "api_key",
-			key: "test-token",
+				],
+			};
+		},
+	});
+
+	const rendered: string[] = [];
+	const ctx = await createContext();
+	ctx.ui.custom = async (factory: any) => {
+		let view: any;
+		const tui = {
+			requestRender() {
+				rendered.push(...view.render(120));
+			},
+		};
+		view = factory(tui, ctx.ui.theme, { matches: () => false }, () => {});
+		rendered.push(...view.render(120));
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		rendered.push(...view.render(120));
+		return undefined as never;
+	};
+	await runCommand(pi, "usage", "--refresh", ctx);
+
+	const output = rendered.join("\n");
+	assert.equal(refresh, true);
+	assert.ok(output.includes("Test provider"), output);
+	assert.ok(output.includes("Spend: $12.50"), output);
+	assert.ok(output.includes("Ada"), output);
+	const formattedFetchedAt = new Intl.DateTimeFormat(undefined, {
+		year: "numeric",
+		month: "short",
+		day: "numeric",
+		hour: "numeric",
+		minute: "2-digit",
+		timeZoneName: "short",
+	}).format(new Date(fetchedAt));
+	assert.ok(output.includes(`updated ${formattedFetchedAt}`), output);
+});
+
+test("usage opens immediately and updates providers as they finish", async () => {
+	const pi = loadExtension(usageExtension);
+	let resolveSlow!: (snapshot: {
+		status: "ok";
+		metrics: Array<{ label: string; value: number; format: "currency" }>;
+	}) => void;
+	const slowSnapshot = new Promise<{
+		status: "ok";
+		metrics: Array<{
+			label: string;
+			value: number;
+			format: "currency";
+		}>;
+	}>((resolve) => {
+		resolveSlow = resolve;
+	});
+	registerUsageProvider(pi as never, {
+		id: "slow-provider",
+		label: "Slow provider",
+		load: async () => slowSnapshot,
+	});
+	registerUsageProvider(pi as never, {
+		id: "fast-provider",
+		label: "Fast provider",
+		load: async () => ({
+			status: "ok" as const,
+			metrics: [
+				{ label: "Fast metric", value: 7, format: "count" as const },
+			],
+		}),
+	});
+
+	const ctx = await createContext();
+	const renders: string[][] = [];
+	let view: any;
+	let resolveCustom!: () => void;
+	let resolveOpened!: () => void;
+	const opened = new Promise<void>((resolve) => {
+		resolveOpened = resolve;
+	});
+	ctx.ui.custom = async (factory: any) => {
+		const customClosed = new Promise<void>((resolve) => {
+			resolveCustom = resolve;
 		});
+		view = factory(
+			{
+				requestRender() {
+					renders.push(view.render(120));
+				},
+			},
+			ctx.ui.theme,
+			{ matches: () => false },
+			() => {},
+		);
+		renders.push(view.render(120));
+		resolveOpened();
+		await customClosed;
+		return undefined as never;
+	};
 
-		const result = await copilotUsage(ctx as never);
+	const command = runCommand(pi, "usage", "", ctx);
+	await opened;
+	const initial = renders[0]?.join("\n") ?? "";
+	assert.ok(initial.includes("Slow provider"), initial);
+	assert.ok(initial.includes("Loading…"), initial);
 
-		assert.equal(result.status, "ok");
-		assert.equal(result.windows?.[0]?.label, "ai credits");
-		assert.equal(result.windows?.[0]?.unlimited, true);
-	} finally {
-		globalThis.fetch = originalFetch;
-	}
+	resolveSlow({
+		status: "ok",
+		metrics: [{ label: "Slow metric", value: 42, format: "currency" }],
+	});
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	const updated = renders.at(-1)?.join("\n") ?? "";
+	assert.ok(updated.includes("Fast metric: 7"), updated);
+	assert.ok(updated.includes("Slow metric: $42.00"), updated);
+
+	resolveCustom();
+	await command;
 });
 
 test("usage command exposes expected completions", () => {
@@ -266,5 +417,8 @@ test("usage command exposes expected completions", () => {
 
 	assert.deepEqual(command?.getArgumentCompletions?.("auth"), [
 		{ value: "auth opencode-go", label: "auth opencode-go" },
+	]);
+	assert.deepEqual(command?.getArgumentCompletions?.("--"), [
+		{ value: "--refresh", label: "--refresh" },
 	]);
 });

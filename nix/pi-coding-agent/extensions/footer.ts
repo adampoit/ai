@@ -13,7 +13,6 @@ import {
 	type PowerlineSegment,
 } from "../components/ui/index.ts";
 import {
-	copilotUsage,
 	limitingWindow,
 	openAiUsage,
 	openCodeGoUsage,
@@ -21,6 +20,7 @@ import {
 	quotaWindowStatus,
 	resetEta,
 	type ProviderUsage,
+	type UsageProviderContext,
 	type UsageWindow,
 } from "./usage.ts";
 
@@ -53,24 +53,36 @@ function compactStatus(key: string, text: string): string {
 	return truncateToWidth(plain, 18, "…");
 }
 
-function quotaProvider(
-	provider: string,
-): "openai" | "copilot" | "opencode-go" | undefined {
+function quotaProvider(provider: string): "openai" | "opencode-go" | undefined {
 	const normalized = provider.toLowerCase();
 	if (normalized.includes("openai") || normalized.includes("codex"))
 		return "openai";
-	if (normalized.includes("copilot") || normalized.includes("github"))
-		return "copilot";
 	if (normalized.includes("opencode")) return "opencode-go";
+}
+
+function usageProviderContext(
+	ctx: ExtensionContext,
+	exec: ExtensionAPI["exec"],
+): UsageProviderContext {
+	return {
+		signal: ctx.signal ?? new AbortController().signal,
+		refresh: false,
+		now: new Date(),
+		mode: ctx.mode,
+		cwd: ctx.cwd,
+		exec,
+		modelRegistry: ctx.modelRegistry,
+	};
 }
 
 async function fetchQuota(
 	provider: ReturnType<typeof quotaProvider>,
 	ctx: ExtensionContext,
+	exec: ExtensionAPI["exec"],
 ): Promise<ProviderUsage | undefined> {
-	if (provider === "openai") return openAiUsage(ctx);
-	if (provider === "copilot") return copilotUsage(ctx);
-	if (provider === "opencode-go") return openCodeGoUsage(ctx);
+	const providerContext = usageProviderContext(ctx, exec);
+	if (provider === "openai") return openAiUsage(providerContext);
+	if (provider === "opencode-go") return openCodeGoUsage(providerContext);
 }
 
 function formatOverage(count: number): string {
@@ -120,6 +132,7 @@ function sessionCostVariants(ctx: ExtensionContext): PowerlineSegment[] {
 
 function quotaVariants(
 	result: ProviderUsage | undefined,
+	provider: string,
 	loading: boolean,
 ): PowerlineSegment[] {
 	if (loading) return [{ text: "quota …", fg: gruvbox.gray, bg: gruvbox.bg }];
@@ -144,10 +157,8 @@ function quotaVariants(
 	if (windows.length === 0)
 		return [{ text: "quota ?", fg: gruvbox.gray, bg: gruvbox.bg }];
 
-	const limiting = limitingWindow(result.provider, windows);
-	const status = limiting
-		? quotaWindowStatus(result.provider, limiting)
-		: "ok";
+	const limiting = limitingWindow(provider, windows);
+	const status = limiting ? quotaWindowStatus(provider, limiting) : "ok";
 	const color =
 		status === "error"
 			? gruvbox.red
@@ -306,7 +317,7 @@ export default function (pi: ExtensionAPI) {
 				if (providerChanged) quota = undefined;
 				quotaStale = false;
 				quotaLoading = true;
-				void fetchQuota(provider, ctx)
+				void fetchQuota(provider, ctx, pi.exec)
 					.then((result) => {
 						if (quotaKey === provider) quota = result;
 					})
@@ -361,14 +372,15 @@ export default function (pi: ExtensionAPI) {
 					const currentQuotaProvider = ctx.model
 						? quotaProvider(ctx.model.provider)
 						: undefined;
-					const copilotCostOptions =
-						currentQuotaProvider === "copilot"
-							? sessionCostVariants(ctx)
-							: [];
+					const costOptions = sessionCostVariants(ctx);
 					const quotaOptions =
-						copilotCostOptions.length > 0
-							? copilotCostOptions
-							: quotaVariants(quota, quotaLoading);
+						costOptions.length > 0
+							? costOptions
+							: quotaVariants(
+									quota,
+									currentQuotaProvider ?? "quota",
+									quotaLoading,
+								);
 
 					const importantRight = renderPowerlineRight([
 						modelSegment(modelWithReasoning),
