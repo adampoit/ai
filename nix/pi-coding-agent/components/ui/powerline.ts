@@ -16,16 +16,23 @@ export type PowerlineSegment = {
 	text: string;
 	fg: string;
 	bg: string;
+	priority?: number;
 	spans?: PowerlineTextSpan[];
 };
 
 export type PlainStatusPart = string | PowerlineSegment;
 
+type PowerlineSide = string | PowerlineSegment[] | undefined;
+type SegmentSide = "left" | "right";
+type SegmentCandidate = {
+	side: SegmentSide;
+	index: number;
+	priority: number;
+};
+
 export type PowerlineStatusLineOptions = {
 	left?: string | PowerlineSegment[];
 	right?: string | PowerlineSegment[];
-	rightPrefix?: string | PowerlineSegment[];
-	rightPrefixSeparator?: string;
 	ellipsis?: string;
 };
 
@@ -35,53 +42,55 @@ export class PowerlineStatusLine implements Component {
 	invalidate(): void {}
 
 	render(width: number): string[] {
-		const left = renderSide(this.options.left, "left");
-		const importantRight = renderSide(this.options.right, "right");
-		const rightPrefixSegments = Array.isArray(this.options.rightPrefix)
-			? this.options.rightPrefix
-			: undefined;
-		const rightSegments = Array.isArray(this.options.right)
-			? this.options.right
-			: undefined;
-		const right =
-			rightPrefixSegments && rightSegments
-				? renderPowerlineRight([
-						...rightPrefixSegments,
-						...rightSegments,
-					])
-				: [
-						typeof this.options.rightPrefix === "string"
-							? this.options.rightPrefix
-							: "",
-						importantRight,
-					]
-						.filter((part): part is string => Boolean(part))
-						.join(this.options.rightPrefixSeparator ?? " ");
+		let left: PowerlineSide = this.options.left;
+		let right: PowerlineSide = this.options.right;
+		let renderedLeft = renderSide(left, "left");
+		let renderedRight = renderSide(right, "right");
 		const ellipsis = this.options.ellipsis ?? "…";
 
-		if (!left && !right) return ["".padEnd(width)];
-		if (!right) return [truncateToWidth(left, width, ellipsis)];
-		if (!left) {
-			const pad = " ".repeat(Math.max(0, width - visibleWidth(right)));
-			return [truncateToWidth(pad + right, width, ellipsis)];
+		while (hasOverflow(renderedLeft, renderedRight, width)) {
+			const candidate = lowestPrioritySegment(
+				Array.isArray(left) ? left : undefined,
+				Array.isArray(right) ? right : undefined,
+			);
+			if (!candidate) break;
+
+			if (candidate.side === "left") {
+				left = removeSegment(left, candidate.index);
+			} else {
+				right = removeSegment(right, candidate.index);
+			}
+			renderedLeft = renderSide(left, "left");
+			renderedRight = renderSide(right, "right");
 		}
 
-		const gap = width - visibleWidth(left) - visibleWidth(right);
-		if (gap >= 1) return [left + " ".repeat(gap) + right];
+		if (!renderedLeft && !renderedRight) return ["".padEnd(width)];
+		if (!renderedRight)
+			return [truncateToWidth(renderedLeft, width, ellipsis)];
+		if (!renderedLeft) {
+			const pad = " ".repeat(
+				Math.max(0, width - visibleWidth(renderedRight)),
+			);
+			return [truncateToWidth(pad + renderedRight, width, ellipsis)];
+		}
+
+		const gap =
+			width - visibleWidth(renderedLeft) - visibleWidth(renderedRight);
+		if (gap >= 1) return [renderedLeft + " ".repeat(gap) + renderedRight];
 
 		const availableLeft = Math.max(
 			0,
-			width - visibleWidth(importantRight || right) - 1,
+			width - visibleWidth(renderedRight) - 1,
 		);
 		if (availableLeft >= 12) {
 			return [
-				truncateToWidth(left, availableLeft, ellipsis) +
+				truncateToWidth(renderedLeft, availableLeft, ellipsis) +
 					" " +
-					(importantRight || right),
+					renderedRight,
 			];
 		}
 
-		return [truncateToWidth(importantRight || right, width, ellipsis)];
+		return [truncateToWidth(renderedRight, width, ellipsis)];
 	}
 }
 
@@ -131,10 +140,55 @@ export function renderPlainStatusParts(
 		.join(style(separator, defaultFg));
 }
 
-function renderSide(
-	side: string | PowerlineSegment[] | undefined,
-	direction: "left" | "right",
-): string {
+function hasOverflow(left: string, right: string, width: number): boolean {
+	const gap = left && right ? 1 : 0;
+	return visibleWidth(left) + visibleWidth(right) + gap > width;
+}
+
+function lowestPrioritySegment(
+	left: PowerlineSegment[] | undefined,
+	right: PowerlineSegment[] | undefined,
+): SegmentCandidate | undefined {
+	const candidates: SegmentCandidate[] = [];
+	for (const [index, segment] of left?.entries() ?? []) {
+		if (segment.text.length > 0) {
+			candidates.push({
+				side: "left",
+				index,
+				priority: segment.priority ?? Number.POSITIVE_INFINITY,
+			});
+		}
+	}
+	for (const [index, segment] of right?.entries() ?? []) {
+		if (segment.text.length > 0) {
+			candidates.push({
+				side: "right",
+				index,
+				priority: segment.priority ?? Number.POSITIVE_INFINITY,
+			});
+		}
+	}
+	if (candidates.length === 0) return undefined;
+
+	const highestPriority = Math.max(
+		...candidates.map((candidate) => candidate.priority),
+	);
+	const lowerPriority = candidates.filter(
+		(candidate) => candidate.priority < highestPriority,
+	);
+	if (lowerPriority.length === 0) return undefined;
+	return lowerPriority.reduce((lowest, candidate) =>
+		candidate.priority < lowest.priority ? candidate : lowest,
+	);
+}
+
+function removeSegment(side: PowerlineSide, index: number): PowerlineSide {
+	return Array.isArray(side)
+		? side.filter((_segment, segmentIndex) => segmentIndex !== index)
+		: side;
+}
+
+function renderSide(side: PowerlineSide, direction: SegmentSide): string {
 	if (!side) return "";
 	return typeof side === "string"
 		? side

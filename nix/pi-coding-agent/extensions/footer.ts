@@ -25,6 +25,15 @@ import {
 } from "./usage.ts";
 
 const BUDGET_BACKGROUND = gruvbox.bg1;
+const FOOTER_PRIORITY = {
+	diagnostics: 10,
+	performance: 20,
+	quota: 30,
+	cost: 40,
+	branch: 80,
+	project: 90,
+	model: 100,
+} as const;
 
 function projectPath(cwd: string): string {
 	const home = process.env.HOME || process.env.USERPROFILE;
@@ -141,6 +150,7 @@ function performanceVariants(
 				text: spans.map((span) => span.text).join(" · "),
 				fg: spans[0].fg,
 				bg: gruvbox.bg2,
+				priority: FOOTER_PRIORITY.performance,
 				spans: spans.length > 1 ? spans : undefined,
 			},
 		];
@@ -275,6 +285,7 @@ function sessionCostVariants(ctx: ExtensionContext): PowerlineSegment[] {
 			text: `$${totalCost.toFixed(3)}`,
 			fg: gruvbox.brightYellow,
 			bg: BUDGET_BACKGROUND,
+			priority: FOOTER_PRIORITY.cost,
 		},
 	];
 }
@@ -285,15 +296,30 @@ function quotaVariants(
 	loading: boolean,
 ): PowerlineSegment[] {
 	if (loading)
-		return [{ text: "quota …", fg: gruvbox.fg3, bg: BUDGET_BACKGROUND }];
+		return [
+			{
+				text: "quota …",
+				fg: gruvbox.fg3,
+				bg: BUDGET_BACKGROUND,
+				priority: FOOTER_PRIORITY.quota,
+			},
+		];
 	if (!result)
-		return [{ text: "quota n/a", fg: gruvbox.fg3, bg: BUDGET_BACKGROUND }];
+		return [
+			{
+				text: "quota n/a",
+				fg: gruvbox.fg3,
+				bg: BUDGET_BACKGROUND,
+				priority: FOOTER_PRIORITY.quota,
+			},
+		];
 	if (result.status !== "ok")
 		return [
 			{
 				text: `quota ${result.status}`,
 				fg: gruvbox.fg3,
 				bg: BUDGET_BACKGROUND,
+				priority: FOOTER_PRIORITY.quota,
 			},
 		];
 	const windows = (result.windows ?? [])
@@ -305,7 +331,14 @@ function quotaVariants(
 		)
 		.slice(0, 3);
 	if (windows.length === 0)
-		return [{ text: "quota ?", fg: gruvbox.fg3, bg: BUDGET_BACKGROUND }];
+		return [
+			{
+				text: "quota ?",
+				fg: gruvbox.fg3,
+				bg: BUDGET_BACKGROUND,
+				priority: FOOTER_PRIORITY.quota,
+			},
+		];
 
 	const limiting = limitingWindow(provider, windows);
 	const status = limiting ? quotaWindowStatus(provider, limiting) : "ok";
@@ -323,16 +356,19 @@ function quotaVariants(
 				.join(" · "),
 			fg: color,
 			bg: BUDGET_BACKGROUND,
+			priority: FOOTER_PRIORITY.quota,
 		},
 		{
 			text: compact.slice(0, 2).join(" · "),
 			fg: color,
 			bg: BUDGET_BACKGROUND,
+			priority: FOOTER_PRIORITY.quota,
 		},
 		{
 			text: quotaCompact(limiting ?? windows[0]),
 			fg: color,
 			bg: BUDGET_BACKGROUND,
+			priority: FOOTER_PRIORITY.quota,
 		},
 	];
 }
@@ -367,6 +403,7 @@ function projectSegment(cwd: string): PowerlineSegment {
 		text: `π ${projectPath(cwd)}`,
 		fg: gruvbox.fg0,
 		bg: gruvbox.blue,
+		priority: FOOTER_PRIORITY.project,
 	};
 }
 
@@ -376,16 +413,23 @@ function branchSegment(branch: string | null): PowerlineSegment {
 				text: ` ${branch}`,
 				fg: gruvbox.green,
 				bg: gruvbox.bg2,
+				priority: FOOTER_PRIORITY.branch,
 			}
 		: {
 				text: "",
 				fg: gruvbox.gray,
 				bg: gruvbox.bg2,
+				priority: FOOTER_PRIORITY.branch,
 			};
 }
 
 function modelSegment(text: string): PowerlineSegment {
-	return { text, fg: gruvbox.fg0, bg: gruvbox.orange };
+	return {
+		text,
+		fg: gruvbox.fg0,
+		bg: gruvbox.orange,
+		priority: FOOTER_PRIORITY.model,
+	};
 }
 
 export default function (pi: ExtensionAPI) {
@@ -531,6 +575,7 @@ export default function (pi: ExtensionAPI) {
 									text: statuses.join(" · "),
 									fg: gruvbox.fg3,
 									bg: gruvbox.bg1,
+									priority: FOOTER_PRIORITY.diagnostics,
 								}
 							: undefined;
 					let quotaIndex = 0;
@@ -546,16 +591,14 @@ export default function (pi: ExtensionAPI) {
 							currentQuotaProvider !== undefined);
 					let showPerformance = performanceOptions.length > 0;
 					let showDiagnostics = diagnostics !== undefined;
-					const buildLeft = (): string =>
-						renderPowerlineLeft(
-							[
-								projectSegment(ctx.cwd),
-								branchSegment(branch),
-								showDiagnostics ? diagnostics : undefined,
-							].filter(
-								(part): part is PowerlineSegment =>
-									part !== undefined,
-							),
+					const buildLeft = (): PowerlineSegment[] =>
+						[
+							projectSegment(ctx.cwd),
+							branchSegment(branch),
+							showDiagnostics ? diagnostics : undefined,
+						].filter(
+							(part): part is PowerlineSegment =>
+								part !== undefined,
 						);
 					const buildSecondary = (): PowerlineSegment[] => {
 						const performance = showPerformance
@@ -572,14 +615,14 @@ export default function (pi: ExtensionAPI) {
 					};
 
 					let left = buildLeft();
-					let secondary = buildSecondary();
-					let right = renderPowerlineRight([
-						...secondary,
-						...importantRight,
-					]);
+					let right = [...buildSecondary(), ...importantRight];
+					let renderedLeft = renderPowerlineLeft(left);
+					let renderedRight = renderPowerlineRight(right);
 
 					while (
-						visibleWidth(left) + visibleWidth(right) + 1 >
+						visibleWidth(renderedLeft) +
+							visibleWidth(renderedRight) +
+							1 >
 						width
 					) {
 						if (showDiagnostics) {
@@ -604,17 +647,14 @@ export default function (pi: ExtensionAPI) {
 							break;
 						}
 						left = buildLeft();
-						secondary = buildSecondary();
-						right = renderPowerlineRight([
-							...secondary,
-							...importantRight,
-						]);
+						right = [...buildSecondary(), ...importantRight];
+						renderedLeft = renderPowerlineLeft(left);
+						renderedRight = renderPowerlineRight(right);
 					}
 
 					return new PowerlineStatusLine({
 						left,
-						right: importantRight,
-						rightPrefix: secondary,
+						right,
 						ellipsis: theme.fg("dim", "…"),
 					}).render(width);
 				},
