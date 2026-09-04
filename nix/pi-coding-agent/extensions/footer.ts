@@ -6,11 +6,11 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
 	gruvbox,
 	PowerlineStatusLine,
-	renderPlainStatusParts,
 	renderPowerlineLeft,
 	renderPowerlineRight,
 	stripAnsi,
 	type PowerlineSegment,
+	type PowerlineTextSpan,
 } from "../components/ui/index.ts";
 import {
 	limitingWindow,
@@ -24,6 +24,17 @@ import {
 	type UsageWindow,
 } from "./usage.ts";
 
+const BUDGET_BACKGROUND = gruvbox.bg1;
+const FOOTER_PRIORITY = {
+	diagnostics: 10,
+	performance: 20,
+	quota: 30,
+	cost: 40,
+	branch: 80,
+	project: 90,
+	model: 100,
+} as const;
+
 function projectPath(cwd: string): string {
 	const home = process.env.HOME || process.env.USERPROFILE;
 	return home && cwd.startsWith(home) ? `~${cwd.slice(home.length)}` : cwd;
@@ -34,6 +45,154 @@ function formatCount(count: number): string {
 	if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
 	if (count < 1000000) return `${Math.round(count / 1000)}k`;
 	return `${(count / 1000000).toFixed(1)}M`;
+}
+
+type CacheUsage = {
+	input?: number;
+	cacheRead?: number;
+	cacheWrite?: number;
+};
+
+type CacheStats = {
+	hasCache: boolean;
+	latestHitRate?: number;
+};
+
+function sessionCacheStats(ctx: ExtensionContext): CacheStats {
+	const stats: CacheStats = { hasCache: false };
+
+	function addUsage(usage: CacheUsage | undefined, latest = false): void {
+		if (!usage) return;
+		const input = usage.input ?? 0;
+		const cacheRead = usage.cacheRead ?? 0;
+		const cacheWrite = usage.cacheWrite ?? 0;
+		stats.hasCache ||= cacheRead > 0 || cacheWrite > 0;
+
+		if (latest) {
+			const promptTokens = input + cacheRead + cacheWrite;
+			stats.latestHitRate =
+				promptTokens > 0 ? (cacheRead / promptTokens) * 100 : undefined;
+		}
+	}
+
+	for (const entry of ctx.sessionManager.getEntries()) {
+		if (entry.type === "message" && entry.message.role === "assistant") {
+			addUsage(entry.message.usage, true);
+		} else if (
+			entry.type === "message" &&
+			entry.message.role === "toolResult" &&
+			entry.message.usage
+		) {
+			addUsage(entry.message.usage);
+		} else if (
+			(entry.type === "branch_summary" || entry.type === "compaction") &&
+			entry.usage
+		) {
+			addUsage(entry.usage);
+		}
+	}
+
+	return stats;
+}
+
+function cacheStatsText(stats: CacheStats): string {
+	if (!stats.hasCache) return "";
+	return stats.latestHitRate !== undefined
+		? `hit ${stats.latestHitRate.toFixed(1)}%`
+		: "cache";
+}
+
+function cacheColor(hitRate: number | undefined): string {
+	if (hitRate === undefined) return gruvbox.brightBlue;
+	if (hitRate >= 80) return gruvbox.brightGreen;
+	if (hitRate >= 50) return gruvbox.brightYellow;
+	return gruvbox.brightRed;
+}
+
+type PerformanceVariant = PowerlineSegment[];
+
+function performanceVariants(
+	cacheStats: CacheStats,
+	tokensPerSecond: number | undefined,
+	contextText: string | undefined,
+	contextPercent: number | null | undefined,
+): PerformanceVariant[] {
+	const cacheText = cacheStatsText(cacheStats);
+	const throughput =
+		tokensPerSecond === undefined
+			? ""
+			: formatTokensPerSecond(tokensPerSecond);
+	const makeVariant = (
+		includeCache: boolean,
+		includeThroughput: boolean,
+		includeContext: boolean,
+	): PerformanceVariant => {
+		const spans = [
+			includeCache && cacheText
+				? {
+						text: cacheText,
+						fg: cacheColor(cacheStats.latestHitRate),
+					}
+				: undefined,
+			includeThroughput && throughput
+				? { text: throughput, fg: gruvbox.brightBlue }
+				: undefined,
+			includeContext && contextText
+				? {
+						text: contextText,
+						fg: contextColor(contextPercent),
+					}
+				: undefined,
+		].filter((span): span is PowerlineTextSpan => span !== undefined);
+		if (spans.length === 0) return [];
+		return [
+			{
+				text: spans.map((span) => span.text).join(" · "),
+				fg: spans[0].fg,
+				bg: gruvbox.bg2,
+				priority: FOOTER_PRIORITY.performance,
+				spans: spans.length > 1 ? spans : undefined,
+			},
+		];
+	};
+
+	const variants =
+		cacheText && throughput && contextText
+			? [
+					makeVariant(true, true, true),
+					makeVariant(true, false, true),
+					makeVariant(false, false, true),
+				]
+			: cacheText && throughput
+				? [
+						makeVariant(true, true, false),
+						makeVariant(true, false, false),
+						makeVariant(false, true, false),
+					]
+				: cacheText && contextText
+					? [
+							makeVariant(true, false, true),
+							makeVariant(false, false, true),
+						]
+					: throughput && contextText
+						? [
+								makeVariant(false, true, true),
+								makeVariant(false, false, true),
+							]
+						: cacheText
+							? [makeVariant(true, false, false)]
+							: throughput
+								? [makeVariant(false, true, false)]
+								: contextText
+									? [makeVariant(false, false, true)]
+									: [];
+	const seen = new Set<string>();
+	return variants.filter((variant) => {
+		const key = variant.map((part) => part.text).join("\u0000");
+		if (seen.has(key)) return false;
+		seen.add(key);
+		return true;
+	});
 }
 
 function formatStatus(text: string): string {
@@ -124,8 +283,9 @@ function sessionCostVariants(ctx: ExtensionContext): PowerlineSegment[] {
 	return [
 		{
 			text: `$${totalCost.toFixed(3)}`,
-			fg: gruvbox.aqua,
-			bg: gruvbox.bg,
+			fg: gruvbox.brightYellow,
+			bg: BUDGET_BACKGROUND,
+			priority: FOOTER_PRIORITY.cost,
 		},
 	];
 }
@@ -135,15 +295,31 @@ function quotaVariants(
 	provider: string,
 	loading: boolean,
 ): PowerlineSegment[] {
-	if (loading) return [{ text: "quota …", fg: gruvbox.gray, bg: gruvbox.bg }];
+	if (loading)
+		return [
+			{
+				text: "quota …",
+				fg: gruvbox.fg3,
+				bg: BUDGET_BACKGROUND,
+				priority: FOOTER_PRIORITY.quota,
+			},
+		];
 	if (!result)
-		return [{ text: "quota n/a", fg: gruvbox.gray, bg: gruvbox.bg }];
+		return [
+			{
+				text: "quota n/a",
+				fg: gruvbox.fg3,
+				bg: BUDGET_BACKGROUND,
+				priority: FOOTER_PRIORITY.quota,
+			},
+		];
 	if (result.status !== "ok")
 		return [
 			{
 				text: `quota ${result.status}`,
-				fg: gruvbox.gray,
-				bg: gruvbox.bg,
+				fg: gruvbox.fg3,
+				bg: BUDGET_BACKGROUND,
+				priority: FOOTER_PRIORITY.quota,
 			},
 		];
 	const windows = (result.windows ?? [])
@@ -155,16 +331,23 @@ function quotaVariants(
 		)
 		.slice(0, 3);
 	if (windows.length === 0)
-		return [{ text: "quota ?", fg: gruvbox.gray, bg: gruvbox.bg }];
+		return [
+			{
+				text: "quota ?",
+				fg: gruvbox.fg3,
+				bg: BUDGET_BACKGROUND,
+				priority: FOOTER_PRIORITY.quota,
+			},
+		];
 
 	const limiting = limitingWindow(provider, windows);
 	const status = limiting ? quotaWindowStatus(provider, limiting) : "ok";
 	const color =
 		status === "error"
-			? gruvbox.red
+			? gruvbox.brightRed
 			: status === "warn"
-				? gruvbox.yellow
-				: gruvbox.green;
+				? gruvbox.brightYellow
+				: gruvbox.brightGreen;
 	const compact = windows.map(quotaCompact);
 	return [
 		{
@@ -172,26 +355,29 @@ function quotaVariants(
 				.map((window) => quotaVisual(window, limiting))
 				.join(" · "),
 			fg: color,
-			bg: gruvbox.bg,
+			bg: BUDGET_BACKGROUND,
+			priority: FOOTER_PRIORITY.quota,
 		},
 		{
 			text: compact.slice(0, 2).join(" · "),
 			fg: color,
-			bg: gruvbox.bg,
+			bg: BUDGET_BACKGROUND,
+			priority: FOOTER_PRIORITY.quota,
 		},
 		{
 			text: quotaCompact(limiting ?? windows[0]),
 			fg: color,
-			bg: gruvbox.bg,
+			bg: BUDGET_BACKGROUND,
+			priority: FOOTER_PRIORITY.quota,
 		},
 	];
 }
 
 function contextColor(percent: number | null | undefined): string {
-	if (percent == null) return gruvbox.gray;
-	if (percent >= 90) return gruvbox.red;
-	if (percent >= 70) return gruvbox.yellow;
-	return gruvbox.green;
+	if (percent == null) return gruvbox.fg3;
+	if (percent >= 90) return gruvbox.brightRed;
+	if (percent >= 70) return gruvbox.brightYellow;
+	return gruvbox.brightGreen;
 }
 
 function formatTokensPerSecond(tokensPerSecond: number): string {
@@ -217,6 +403,7 @@ function projectSegment(cwd: string): PowerlineSegment {
 		text: `π ${projectPath(cwd)}`,
 		fg: gruvbox.fg0,
 		bg: gruvbox.blue,
+		priority: FOOTER_PRIORITY.project,
 	};
 }
 
@@ -226,23 +413,23 @@ function branchSegment(branch: string | null): PowerlineSegment {
 				text: ` ${branch}`,
 				fg: gruvbox.green,
 				bg: gruvbox.bg2,
+				priority: FOOTER_PRIORITY.branch,
 			}
 		: {
 				text: "",
 				fg: gruvbox.gray,
 				bg: gruvbox.bg2,
+				priority: FOOTER_PRIORITY.branch,
 			};
 }
 
 function modelSegment(text: string): PowerlineSegment {
-	return { text, fg: gruvbox.fg0, bg: gruvbox.bg2 };
-}
-
-function contextSegment(
-	text: string,
-	percent: number | null | undefined,
-): PowerlineSegment {
-	return { text, fg: contextColor(percent), bg: gruvbox.bg1 };
+	return {
+		text,
+		fg: gruvbox.fg0,
+		bg: gruvbox.orange,
+		priority: FOOTER_PRIORITY.model,
+	};
 }
 
 export default function (pi: ExtensionAPI) {
@@ -355,11 +542,6 @@ export default function (pi: ExtensionAPI) {
 						)
 						.filter(Boolean);
 
-					const left = renderPowerlineLeft([
-						projectSegment(ctx.cwd),
-						branchSegment(branch),
-					]);
-
 					const contextPart = context
 						? `${context.percent === null ? "?" : `${context.percent.toFixed(0)}%`}/${formatCount(context.contextWindow)}`
 						: "ctx ?";
@@ -372,53 +554,86 @@ export default function (pi: ExtensionAPI) {
 					const currentQuotaProvider = ctx.model
 						? quotaProvider(ctx.model.provider)
 						: undefined;
+					const cacheStats = sessionCacheStats(ctx);
 					const costOptions = sessionCostVariants(ctx);
-					const quotaOptions =
-						costOptions.length > 0
-							? costOptions
-							: quotaVariants(
-									quota,
-									currentQuotaProvider ?? "quota",
-									quotaLoading,
-								);
+					const quotaOptions = quotaVariants(
+						quota,
+						currentQuotaProvider ?? "quota",
+						quotaLoading,
+					);
 
-					const importantRight = renderPowerlineRight([
-						modelSegment(modelWithReasoning),
-						contextSegment(contextPart, context?.percent),
-					]);
-					const secondaryParts = [
-						...(turnTokensPerSecond === undefined
-							? []
-							: [
-									{
-										text: formatTokensPerSecond(
-											turnTokensPerSecond,
-										),
-										fg: gruvbox.aqua,
-										bg: gruvbox.bg,
-									},
-								]),
-						...statuses,
-					];
+					const importantRight = [modelSegment(modelWithReasoning)];
+					const performanceOptions = performanceVariants(
+						cacheStats,
+						turnTokensPerSecond,
+						context ? contextPart : undefined,
+						context?.percent,
+					);
+					const diagnostics =
+						statuses.length > 0
+							? {
+									text: statuses.join(" · "),
+									fg: gruvbox.fg3,
+									bg: gruvbox.bg1,
+									priority: FOOTER_PRIORITY.diagnostics,
+								}
+							: undefined;
 					let quotaIndex = 0;
-					let showQuota = quotaOptions.length > 0;
-					const buildSecondary = () =>
-						renderPlainStatusParts([
-							showQuota ? quotaOptions[quotaIndex] : "",
-							...secondaryParts,
-						]);
+					let performanceIndex = 0;
+					const hasSubscriptionQuota =
+						currentQuotaProvider !== undefined &&
+						quota?.status === "ok";
+					let showCost =
+						costOptions.length > 0 && !hasSubscriptionQuota;
+					let showQuota =
+						quotaOptions.length > 0 &&
+						(costOptions.length === 0 ||
+							currentQuotaProvider !== undefined);
+					let showPerformance = performanceOptions.length > 0;
+					let showDiagnostics = diagnostics !== undefined;
+					const buildLeft = (): PowerlineSegment[] =>
+						[
+							projectSegment(ctx.cwd),
+							branchSegment(branch),
+							showDiagnostics ? diagnostics : undefined,
+						].filter(
+							(part): part is PowerlineSegment =>
+								part !== undefined,
+						);
+					const buildSecondary = (): PowerlineSegment[] => {
+						const performance = showPerformance
+							? (performanceOptions[performanceIndex] ?? [])
+							: [];
+						return [
+							showCost ? costOptions[0] : undefined,
+							showQuota ? quotaOptions[quotaIndex] : undefined,
+							...performance,
+						].filter(
+							(part): part is PowerlineSegment =>
+								part !== undefined,
+						);
+					};
 
-					let secondary = buildSecondary();
-					let right = secondary
-						? `${secondary} ${importantRight}`
-						: importantRight;
+					let left = buildLeft();
+					let right = [...buildSecondary(), ...importantRight];
+					let renderedLeft = renderPowerlineLeft(left);
+					let renderedRight = renderPowerlineRight(right);
 
 					while (
-						visibleWidth(left) + visibleWidth(right) + 1 >
+						visibleWidth(renderedLeft) +
+							visibleWidth(renderedRight) +
+							1 >
 						width
 					) {
-						if (secondaryParts.length > 0) {
-							secondaryParts.pop();
+						if (showDiagnostics) {
+							showDiagnostics = false;
+						} else if (
+							showPerformance &&
+							performanceIndex < performanceOptions.length - 1
+						) {
+							performanceIndex += 1;
+						} else if (showPerformance) {
+							showPerformance = false;
 						} else if (
 							showQuota &&
 							quotaIndex < quotaOptions.length - 1
@@ -426,19 +641,20 @@ export default function (pi: ExtensionAPI) {
 							quotaIndex += 1;
 						} else if (showQuota) {
 							showQuota = false;
+						} else if (showCost) {
+							showCost = false;
 						} else {
 							break;
 						}
-						secondary = buildSecondary();
-						right = secondary
-							? `${secondary} ${importantRight}`
-							: importantRight;
+						left = buildLeft();
+						right = [...buildSecondary(), ...importantRight];
+						renderedLeft = renderPowerlineLeft(left);
+						renderedRight = renderPowerlineRight(right);
 					}
 
 					return new PowerlineStatusLine({
 						left,
-						right: importantRight,
-						rightPrefix: secondary,
+						right,
 						ellipsis: theme.fg("dim", "…"),
 					}).render(width);
 				},
