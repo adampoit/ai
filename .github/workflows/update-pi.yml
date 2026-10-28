@@ -56,9 +56,9 @@ jobs:
               run: |
                   set -euo pipefail
                   if [ -z "$UPDATE_VERSION" ]; then
-                    UPDATE_VERSION=$(nix develop -c npm view @earendil-works/pi-coding-agent version)
+                    UPDATE_VERSION=$(nix develop .#update-pi -c npm view @earendil-works/pi-coding-agent version)
                   fi
-                  nix develop -c nix-update pi-coding-agent \
+                  nix develop .#update-pi -c nix-update pi-coding-agent \
                     --flake \
                     --override-filename nix/pi-coding-agent-source.nix \
                     --src-only \
@@ -80,12 +80,12 @@ jobs:
               run: |
                   set -euo pipefail
                   version="${{ steps.update.outputs.version }}"
-                  nix develop -c npm install --save-dev --save-exact \
+                  nix develop .#update-pi -c npm install --save-dev --save-exact \
                     "@earendil-works/pi-agent-core@$version" \
                     "@earendil-works/pi-ai@$version" \
                     "@earendil-works/pi-coding-agent@$version" \
                     "@earendil-works/pi-tui@$version"
-                  nix develop -c nix-update pi-coding-agent \
+                  nix develop .#update-pi -c nix-update pi-coding-agent \
                     --flake \
                     --override-filename nix/pi-coding-agent-source.nix \
                     --no-src \
@@ -99,7 +99,7 @@ jobs:
               if: steps.update.outputs.changed == 'true'
               run: |
                   set -euo pipefail
-                  nix develop -c npm run typecheck
+                  nix develop .#update-pi -c npm run typecheck
                   nix develop -c npm test
                   nix flake check --print-build-logs
 

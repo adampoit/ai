@@ -86,7 +86,7 @@ The four Pi npm development dependencies must match the version in `nix/pi-codin
 
 ## Pi Updates
 
-The scheduled `update-pi` GitHub Actions workflow uses `nix-update` to update the runtime source and dependency hashes, synchronizes the four npm development dependencies, validates the result, and opens a pull request. The runtime source is unpacked with `fetchzip` and its incomplete published shrinkwrap is repaired with `npm-lockfile-fix` before dependencies are fetched. The workflow can also be run manually with an explicit version from the Actions UI.
+The scheduled `update-pi` GitHub Actions workflow uses `nix-update` to update the runtime source and dependency hashes, synchronizes the four npm development dependencies, validates the result, and opens a pull request. Update commands and typechecking use the minimal `nix develop .#update-pi` shell; tests still use the default shell so real language servers remain available. The runtime source is unpacked with `fetchzip` and its incomplete published shrinkwrap is repaired with `npm-lockfile-fix` before dependencies are fetched. The workflow can also be run manually with an explicit version from the Actions UI.
 
 ## License
 

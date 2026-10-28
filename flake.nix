@@ -158,6 +158,13 @@
     });
 
     devShells = forAllSystems (pkgs: {
+      update-pi = pkgs.mkShell {
+        packages = [
+          pkgs.git
+          pkgs.nix-update
+          pkgs.nodejs_24
+        ];
+      };
       default = pkgs.mkShell {
         packages =
           lspTestPackages pkgs
