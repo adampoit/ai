@@ -7,6 +7,10 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import lspExtension from "../../../nix/pi-coding-agent/extensions/lsp.ts";
+import {
+	assertCommandAvailable,
+	withOnlyCommandOnPath,
+} from "./test-environment.ts";
 
 type RegisteredTool = {
 	name: string;
@@ -1290,46 +1294,6 @@ async function copyFixtureProject(languageCase: LanguageCase) {
 		);
 	}
 	return cwd;
-}
-
-async function withOnlyCommandOnPath(
-	languageCase: LanguageCase,
-	callback: () => Promise<void>,
-) {
-	const oldPath = process.env.PATH;
-	const commandDirs = [
-		languageCase.command,
-		...(languageCase.extraPathCommands ?? []),
-	].map((command) => path.dirname(assertCommandAvailable(command)));
-	process.env.PATH = [...new Set(commandDirs)].join(path.delimiter);
-	try {
-		await callback();
-	} finally {
-		process.env.PATH = oldPath;
-	}
-}
-
-function assertCommandAvailable(command: string) {
-	const commandPath = findCommand(command);
-	assert.ok(commandPath, `${command} is not available on PATH`);
-	return commandPath;
-}
-
-function findCommand(command: string) {
-	try {
-		const matches = execFileSync("which", ["-a", command], {
-			encoding: "utf8",
-		})
-			.split("\n")
-			.map((line) => line.trim())
-			.filter(Boolean);
-		return (
-			matches.find((match) => match.startsWith("/nix/store/")) ??
-			matches[0]
-		);
-	} catch {
-		return undefined;
-	}
 }
 
 async function waitFor(

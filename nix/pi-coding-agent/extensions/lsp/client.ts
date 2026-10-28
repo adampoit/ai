@@ -29,7 +29,7 @@ export class LspClient {
 		{ resolve: (value: unknown) => void; reject: (error: Error) => void }
 	>();
 	private projectInitialized: boolean;
-	private projectInitializationWaiters = new Set<() => void>();
+	private projectInitializationWaiters = new Set<(error?: unknown) => void>();
 	private serverCapabilities: unknown;
 	private stderr = "";
 
@@ -171,16 +171,55 @@ export class LspClient {
 		);
 	}
 
-	async waitForProjectInitialization(timeoutMs = 10_000) {
+	notifyDocumentSaved(textDocument: { uri: string; text: string }) {
+		const sync = (
+			this.serverCapabilities as
+				| {
+						textDocumentSync?:
+							| number
+							| { save?: boolean | { includeText?: boolean } };
+				  }
+				| undefined
+		)?.textDocumentSync;
+		if (!sync || typeof sync !== "object" || !sync.save) return;
+		this.notify("textDocument/didSave", {
+			textDocument: { uri: textDocument.uri },
+			...(typeof sync.save === "object" && sync.save.includeText
+				? { text: textDocument.text }
+				: {}),
+		});
+	}
+
+	async waitForProjectInitialization(
+		timeoutMs = this.config.projectInitializationTimeoutMs ?? 10_000,
+		signal?: AbortSignal,
+	) {
+		signal?.throwIfAborted();
 		if (this.projectInitialized) return;
-		await new Promise<void>((resolve) => {
-			const resolveOnce = () => {
+		if (!this.started) throw new Error(`${this.name} is not running`);
+		await new Promise<void>((resolve, reject) => {
+			const finish = (error?: unknown) => {
 				clearTimeout(timer);
-				this.projectInitializationWaiters.delete(resolveOnce);
-				resolve();
+				this.projectInitializationWaiters.delete(finish);
+				signal?.removeEventListener("abort", onAbort);
+				if (error !== undefined) reject(error);
+				else resolve();
 			};
-			const timer = setTimeout(resolveOnce, timeoutMs);
-			this.projectInitializationWaiters.add(resolveOnce);
+			const onAbort = () => finish(signal?.reason);
+			const timer = setTimeout(
+				() =>
+					finish(
+						this.config.projectInitializationTimeoutMs === undefined
+							? undefined
+							: new Error(
+									`${this.name} project initialization timed out after ${timeoutMs}ms`,
+								),
+					),
+				timeoutMs,
+			);
+			this.projectInitializationWaiters.add(finish);
+			signal?.addEventListener("abort", onAbort, { once: true });
+			if (signal?.aborted) onAbort();
 		});
 	}
 
@@ -243,7 +282,12 @@ export class LspClient {
 				this.handleServerRequest(message);
 				return;
 			}
-			if (message.method === "workspace/projectInitializationComplete") {
+			if (
+				message.method === "workspace/projectInitializationComplete" ||
+				(message.method === "experimental/serverStatus" &&
+					(message.params as { quiescent?: boolean } | undefined)
+						?.quiescent === true)
+			) {
 				this.markProjectInitialized();
 			}
 			this.onNotification?.(message.method, message.params);
@@ -275,6 +319,7 @@ export class LspClient {
 		this.completeStartup();
 		this.proc = undefined;
 		this.started = false;
+		for (const finish of this.projectInitializationWaiters) finish(error);
 		this.rejectAll(error);
 	}
 
@@ -286,6 +331,7 @@ export class LspClient {
 
 export function defaultCapabilities() {
 	return {
+		experimental: { serverStatusNotification: true },
 		textDocument: {
 			publishDiagnostics: { relatedInformation: true },
 			diagnostic: { dynamicRegistration: false },

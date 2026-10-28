@@ -82,6 +82,8 @@ nix develop -c npm test
 nix flake check
 ```
 
+Rust LSP tests use an isolated Cargo home and retain the C linker on their restricted `PATH`, so local rustup proxies cannot replace the dev shell's toolchain. Rust queries wait for rust-analyzer's ready notification, with a 60-second initialization deadline rather than a fixed sleep.
+
 The four Pi npm development dependencies must match the version in `nix/pi-coding-agent-source.nix`; `nix flake check` enforces this and builds the pinned runtime package.
 
 ## Pi Updates

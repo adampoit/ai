@@ -348,6 +348,11 @@ export class LspManager {
 						file,
 						signal,
 					);
+					await client.waitForProjectInitialization(
+						undefined,
+						signal,
+					);
+					client.notifyDocumentSaved(textDocument);
 					if (client.supportsDocumentDiagnostics()) {
 						await this.pullDiagnostics(client, textDocument).catch(
 							() => undefined,
@@ -383,7 +388,7 @@ export class LspManager {
 			params.file,
 			signal,
 			async (client, textDocument) => {
-				await client.waitForProjectInitialization();
+				await client.waitForProjectInitialization(undefined, signal);
 				const result = await requestWithContentModifiedRetry(
 					() =>
 						client.request(method, {
@@ -409,7 +414,7 @@ export class LspManager {
 			file,
 			signal,
 			async (client, textDocument) => {
-				await client.waitForProjectInitialization();
+				await client.waitForProjectInitialization(undefined, signal);
 				const symbols = await requestWithContentModifiedRetry(
 					() =>
 						client.request("textDocument/documentSymbol", {
@@ -446,7 +451,7 @@ export class LspManager {
 					skippedUnsupported = true;
 					continue;
 				}
-				await client.waitForProjectInitialization();
+				await client.waitForProjectInitialization(undefined, signal);
 				results.push(
 					await client.request("workspace/symbol", { query }),
 				);

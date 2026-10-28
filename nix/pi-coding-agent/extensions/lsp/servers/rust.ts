@@ -6,6 +6,8 @@ export const rustLspServer = {
 		command: "rust-analyzer",
 		args: [],
 	}),
+	isProjectInitialized: false,
+	projectInitializationTimeoutMs: 60_000,
 	initializationOptions: async () => ({
 		initializationOptions: {
 			check: {

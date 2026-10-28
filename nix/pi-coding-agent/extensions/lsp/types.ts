@@ -49,6 +49,8 @@ export interface LspServerImplementation {
 	command: string;
 	args: string[];
 	isProjectInitialized?: boolean;
+	/** An explicit deadline rejects partially initialized results instead of falling back. */
+	projectInitializationTimeoutMs?: number;
 	initializationOptions?: (cwd: string) => Promise<Record<string, unknown>>;
 	processDirectory?: (cwd: string) => Promise<string>;
 	processEnvironment?: (
