@@ -1545,7 +1545,10 @@ export default function contextViewerExtension(pi: ExtensionAPI) {
 	pi.on("before_agent_start", (event: BeforeAgentStartEvent) => {
 		lastPrompt = {
 			at: Date.now(),
-			prompt: event.prompt,
+			prompt:
+				event.messageType === "user"
+					? event.prompt
+					: `[Custom message: ${event.message.customType}]`,
 			systemPrompt: event.systemPrompt,
 			options: event.systemPromptOptions,
 		};

@@ -434,7 +434,11 @@ export function registerInstructionBridge(pi: ExtensionAPI) {
 	});
 
 	pi.on("before_agent_start", (event, ctx) => {
-		activePaths = new Set(extractPromptPaths(ctx.cwd, event.prompt));
+		activePaths = new Set(
+			event.messageType === "user"
+				? extractPromptPaths(ctx.cwd, event.prompt)
+				: [],
+		);
 		return undefined;
 	});
 

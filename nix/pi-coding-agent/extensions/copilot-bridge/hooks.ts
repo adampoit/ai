@@ -341,6 +341,7 @@ export function registerHookBridge(pi: ExtensionAPI) {
 	});
 
 	pi.on("before_agent_start", async (event, ctx) => {
+		if (event.messageType !== "user") return;
 		const hooks = await loadHooks(ctx.cwd, ctx);
 		await runCommandHooks(
 			hooks.userPromptSubmitted,

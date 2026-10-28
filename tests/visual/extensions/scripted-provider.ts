@@ -2,11 +2,12 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
 	createAssistantMessageEventStream,
 	type AssistantMessage,
+	type ToolCall,
 } from "@earendil-works/pi-ai";
 
 const scenarios: Record<
 	string,
-	{ name: string; arguments: Record<string, unknown> }
+	{ name: string; arguments: ToolCall["arguments"] }
 > = {
 	"fixture:grep-success": {
 		name: "grep",

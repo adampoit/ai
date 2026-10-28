@@ -211,6 +211,7 @@ test("copilot bridge injects matching path-specific instructions from prompt pat
 	await pi.emit(
 		"before_agent_start",
 		{
+			messageType: "user",
 			prompt: "Update src/index.ts",
 			systemPrompt: "Base prompt",
 			systemPromptOptions: { cwd: ctx.cwd },
@@ -247,6 +248,23 @@ test("copilot bridge injects matching path-specific instructions from prompt pat
 		false,
 	);
 	assert.equal(messages[0].content.includes("applyTo:"), false);
+
+	await pi.emit(
+		"before_agent_start",
+		{
+			messageType: "custom",
+			message: {
+				customType: "scheduled-task",
+				content: "Continue",
+				display: true,
+			},
+			systemPrompt: "Base prompt",
+			systemPromptOptions: { cwd: ctx.cwd },
+		},
+		ctx,
+	);
+	const [customResult] = await pi.emit("context", { messages: [] }, ctx);
+	assert.equal(customResult, undefined);
 });
 
 test("copilot bridge progressively injects path-specific instructions after tool calls encounter files", async () => {
@@ -268,6 +286,7 @@ test("copilot bridge progressively injects path-specific instructions after tool
 	await pi.emit(
 		"before_agent_start",
 		{
+			messageType: "user",
 			prompt: "Inspect the implementation",
 			systemPrompt: "Base prompt",
 			systemPromptOptions: { cwd: ctx.cwd },
@@ -330,6 +349,7 @@ test("copilot bridge skips cloud-agent excluded path instructions", async () => 
 	await pi.emit(
 		"before_agent_start",
 		{
+			messageType: "user",
 			prompt: "Update src/index.ts",
 			systemPrompt: "Base prompt",
 			systemPromptOptions: { cwd: ctx.cwd },
@@ -408,6 +428,7 @@ test("copilot bridge runs user prompt hooks", async () => {
 	await pi.emit(
 		"before_agent_start",
 		{
+			messageType: "user",
 			prompt: "Implement the feature",
 			systemPrompt: "Base prompt",
 			systemPromptOptions: { cwd: ctx.cwd },
@@ -420,6 +441,26 @@ test("copilot bridge runs user prompt hooks", async () => {
 	) as { prompt: string; cwd: string };
 	assert.equal(hookInput.prompt, "Implement the feature");
 	assert.equal(hookInput.cwd, ctx.cwd);
+
+	await writeFile(path.join(ctx.cwd, "prompt-hook.json"), "unchanged");
+	await pi.emit(
+		"before_agent_start",
+		{
+			messageType: "custom",
+			message: {
+				customType: "scheduled-task",
+				content: "Continue",
+				display: true,
+			},
+			systemPrompt: "Base prompt",
+			systemPromptOptions: { cwd: ctx.cwd },
+		},
+		ctx,
+	);
+	assert.equal(
+		await readFile(path.join(ctx.cwd, "prompt-hook.json"), "utf8"),
+		"unchanged",
+	);
 });
 
 test("copilot bridge blocks tool calls denied by preToolUse hooks", async () => {
@@ -841,6 +882,7 @@ test("copilot bridge passes hook cwd and env", async () => {
 	await pi.emit(
 		"before_agent_start",
 		{
+			messageType: "user",
 			prompt: "Implement the feature",
 			systemPrompt: "Base prompt",
 			systemPromptOptions: { cwd: ctx.cwd },
@@ -885,6 +927,7 @@ test("copilot bridge blocks dangerous hook environment overrides", async () => {
 	await pi.emit(
 		"before_agent_start",
 		{
+			messageType: "user",
 			prompt: "Implement the feature",
 			systemPrompt: "Base prompt",
 			systemPromptOptions: { cwd: ctx.cwd },
@@ -1007,6 +1050,7 @@ test("copilot bridge leaves the system prompt unchanged when no Copilot files ex
 	const [result] = await pi.emit(
 		"before_agent_start",
 		{
+			messageType: "user",
 			prompt: "Implement a feature",
 			systemPrompt: "Base prompt",
 			systemPromptOptions: { cwd: ctx.cwd },

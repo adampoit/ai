@@ -433,6 +433,9 @@ function cleanEnvironment(home: string): Record<string, string> {
 		PATH: process.env.PATH ?? "",
 		TERM: "xterm-256color",
 		COLORTERM: "truecolor",
+		// The virtual terminal is not inside the caller's tmux pane.
+		TMUX: "",
+		TMUX_PANE: "",
 		PI_OFFLINE: "1",
 		PI_SKIP_VERSION_CHECK: "1",
 	};

@@ -3,6 +3,7 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    pi.url = "github:earendil-works/pi/v1.4.0";
     unified-review = {
       url = "github:adampoit/unified-review.nvim";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -12,6 +13,7 @@
   outputs = {
     self,
     nixpkgs,
+    pi,
     unified-review,
     ...
   }: let
@@ -92,8 +94,8 @@
         writeWrapper vscode-eslint-language-server eslint-language-features/server/out/eslintServer.js
       '';
     kotlinLsp = pkgs: pkgs.callPackage ./nix/kotlin-lsp.nix {};
-    piPackage = pkgs: pkgs.callPackage ./nix/pi-coding-agent-package.nix {};
-    piVersion = (import ./nix/pi-coding-agent-source.nix).version;
+    piPackage = pkgs: pi.packages.${pkgs.stdenv.hostPlatform.system}.default;
+    piVersion = (builtins.fromJSON (builtins.readFile (pi + "/packages/coding-agent/package.json"))).version;
     packageJson = builtins.fromJSON (builtins.readFile ./package.json);
     piNpmPackages = [
       "@earendil-works/pi-agent-core"
@@ -118,7 +120,6 @@
       (kotlinLsp pkgs)
       pkgs.lua-language-server
       pkgs.marksman
-      pkgs.nix-update
       pkgs.nixd
       pkgs.nodejs_24
       pkgs.roslyn-ls
@@ -161,7 +162,6 @@
       update-pi = pkgs.mkShell {
         packages = [
           pkgs.git
-          pkgs.nix-update
           pkgs.nodejs_24
         ];
       };

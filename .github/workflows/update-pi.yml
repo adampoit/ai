@@ -50,50 +50,21 @@ jobs:
                     printf '%s\n' "extra-trusted-public-keys = $CACHE_KEY" >> ~/.config/nix/nix.conf
                   fi
 
-            - name: Update Pi package
+            - name: Update Pi and npm dependencies
               env:
                   UPDATE_VERSION: ${{ inputs.version || '' }}
-              run: |
-                  set -euo pipefail
-                  if [ -z "$UPDATE_VERSION" ]; then
-                    UPDATE_VERSION=$(nix develop .#update-pi -c npm view @earendil-works/pi-coding-agent version)
-                  fi
-                  nix develop .#update-pi -c nix-update pi-coding-agent \
-                    --flake \
-                    --override-filename nix/pi-coding-agent-source.nix \
-                    --src-only \
-                    --version "$UPDATE_VERSION"
+              run: nix develop .#update-pi -c node scripts/update-pi.mjs
 
             - name: Check for an update
               id: update
               run: |
                   set -euo pipefail
-                  if git diff --quiet --exit-code -- nix/pi-coding-agent-source.nix; then
+                  if git diff --quiet --exit-code -- flake.nix flake.lock package.json package-lock.json; then
                     echo "changed=false" >> "$GITHUB_OUTPUT"
                   else
                     echo "changed=true" >> "$GITHUB_OUTPUT"
                     echo "version=$(nix eval --raw .#pi-coding-agent.version)" >> "$GITHUB_OUTPUT"
                   fi
-
-            - name: Synchronize npm dependencies
-              if: steps.update.outputs.changed == 'true'
-              run: |
-                  set -euo pipefail
-                  version="${{ steps.update.outputs.version }}"
-                  nix develop .#update-pi -c npm install --save-dev --save-exact \
-                    "@earendil-works/pi-agent-core@$version" \
-                    "@earendil-works/pi-ai@$version" \
-                    "@earendil-works/pi-coding-agent@$version" \
-                    "@earendil-works/pi-tui@$version"
-                  nix develop .#update-pi -c nix-update pi-coding-agent \
-                    --flake \
-                    --override-filename nix/pi-coding-agent-source.nix \
-                    --no-src \
-                    --version skip
-
-            - name: Format package metadata
-              if: steps.update.outputs.changed == 'true'
-              run: nix run nixpkgs#alejandra -- nix/pi-coding-agent-source.nix
 
             - name: Validate update
               if: steps.update.outputs.changed == 'true'
@@ -110,7 +81,8 @@ jobs:
               with:
                   token: ${{ steps.not-adam.outputs.token }}
                   add-paths: |
-                      nix/pi-coding-agent-source.nix
+                      flake.nix
+                      flake.lock
                       package.json
                       package-lock.json
                   branch: automation/update-pi
@@ -119,7 +91,7 @@ jobs:
                   title: Update Pi to ${{ steps.update.outputs.version }}
                   body: |
                       ## Summary
-                      - update the pinned Pi runtime with `nix-update`
+                      - update the pinned upstream Pi flake release
                       - synchronize Pi extension development dependencies
                       - run typechecking, unit tests, and flake checks
                   labels: dependencies

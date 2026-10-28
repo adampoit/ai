@@ -46,6 +46,7 @@ test("context-viewer captures prompt and live context for rendering", async () =
 	await pi.emit(
 		"before_agent_start",
 		{
+			messageType: "user",
 			prompt: "Inspect the project",
 			systemPrompt: "System prompt with AGENTS.md and skill details",
 			systemPromptOptions: {
@@ -89,6 +90,39 @@ test("context-viewer captures prompt and live context for rendering", async () =
 	assert.ok(output.includes("last live"), output);
 	assert.ok(output.includes("2 messages"), output);
 	assert.ok(output.includes("Inspect the project"), output);
+});
+
+test("context-viewer captures runs started by custom messages", async () => {
+	const pi = loadExtension(contextViewerExtension);
+	const ctx = await createContext();
+	const rendered: string[] = [];
+	ctx.ui.custom = async (factory: any) => {
+		const view = factory(
+			{ requestRender() {} },
+			ctx.ui.theme,
+			{ matches: () => false },
+			() => {},
+		);
+		view.handleInput("6");
+		rendered.push(...view.render(100));
+		return undefined as never;
+	};
+	await pi.emit(
+		"before_agent_start",
+		{
+			messageType: "custom",
+			message: {
+				customType: "scheduled-task",
+				content: "Continue",
+				display: true,
+			},
+			systemPrompt: "Base prompt",
+			systemPromptOptions: { cwd: ctx.cwd },
+		},
+		ctx,
+	);
+	await runCommand(pi, "context", "last live", ctx);
+	assert.match(rendered.join("\n"), /Custom message: scheduled-task/);
 });
 
 test("context-viewer command exposes expected completions", () => {

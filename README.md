@@ -84,11 +84,19 @@ nix flake check
 
 Rust LSP tests use an isolated Cargo home and retain the C linker on their restricted `PATH`, so local rustup proxies cannot replace the dev shell's toolchain. Rust queries wait for rust-analyzer's ready notification, with a 60-second initialization deadline rather than a fixed sleep.
 
-The four Pi npm development dependencies must match the version in `nix/pi-coding-agent-source.nix`; `nix flake check` enforces this and builds the pinned runtime package.
+The four Pi npm development dependencies must match the release pinned by the `pi` flake input; `nix flake check` enforces this and builds the upstream runtime package.
 
 ## Pi Updates
 
-The scheduled `update-pi` GitHub Actions workflow uses `nix-update` to update the runtime source and dependency hashes, synchronizes the four npm development dependencies, validates the result, and opens a pull request. Update commands and typechecking use the minimal `nix develop .#update-pi` shell; tests still use the default shell so real language servers remain available. The runtime source is unpacked with `fetchzip` and its incomplete published shrinkwrap is repaired with `npm-lockfile-fix` before dependencies are fetched. The workflow can also be run manually with an explicit version from the Actions UI.
+The scheduled `update-pi` GitHub Actions workflow pins an upstream Pi release tag, updates its flake lock, synchronizes the four npm development dependencies, validates the result, and opens a pull request. The runtime uses [Pi's upstream Nix flake](https://github.com/earendil-works/pi/blob/4a080252f06caf63a525d7873c5d94d3c23887e0/flake.nix), which builds from its checked-in dependency lockfiles rather than relying on the npm tarball's contents. Upstream's Nixpkgs inputs are retained, including its Intel macOS compatibility pin.
+
+To run the same update locally (omit the version for the latest stable release):
+
+```bash
+nix develop .#update-pi -c node scripts/update-pi.mjs 1.4.0
+```
+
+Update commands and typechecking use the minimal `nix develop .#update-pi` shell; tests still use the default shell so real language servers remain available. The workflow can also be run manually with an explicit version from the Actions UI.
 
 ## License
 
